@@ -10,8 +10,6 @@ The project asks whether a new ranking policy can be evaluated reliably from bia
 
 The planned system includes two-tower retrieval, approximate nearest-neighbor search, LambdaRank reranking, and offline policy evaluation.
 
-The core system is not implemented yet. Milestone 1 focuses on project scoping and repository setup.
-
 ## Quick Start
 
 Requires Python 3.11 or later.
@@ -25,6 +23,8 @@ source .venv/bin/activate
 
 pip install -e ".[dev]"
 pytest
+```
 
 ## License
+
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
