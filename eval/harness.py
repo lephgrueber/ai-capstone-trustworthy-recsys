@@ -12,7 +12,6 @@ from pathlib import Path
 from statistics import mean
 from typing import Callable, Sequence
 
-
 # Allow `python eval/harness.py` to import the project package.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,11 +24,13 @@ from trustworthy_recsys.evaluation.metrics import ndcg_at_k, recall_at_k
 
 @dataclass(frozen=True)
 class EvalExample:
-    """One recommendation evaluation example."""
+    """One evaluation example for recommendation scoring."""
 
     user_id: str
-    history_items: list[str]
-    relevant_items: list[str]
+    history_items: list[str]  # Movie IDs from interactions
+    relevant_items: list[
+        str
+    ]  # movie IDs considered relevant for scoring, used by the evaluator
 
 
 @dataclass(frozen=True)
@@ -71,9 +72,7 @@ def _load_json_object(line: str, path: Path, line_number: int) -> dict:
     try:
         record = json.loads(line)
     except json.JSONDecodeError as error:
-        raise ValueError(
-            f"{context}: invalid JSON ({error.msg})"
-        ) from error
+        raise ValueError(f"{context}: invalid JSON ({error.msg})") from error
 
     if not isinstance(record, dict):
         raise ValueError(f"{context}: record must be a JSON object")
@@ -93,9 +92,7 @@ def _require_nonempty_string(
 
     value = record[field_name]
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(
-            f"{context}: '{field_name}' must be a nonempty string"
-        )
+        raise ValueError(f"{context}: '{field_name}' must be a nonempty string")
 
     return value
 
@@ -134,7 +131,7 @@ def _require_string_list(
 
 
 def load_evaluation_examples(path: Path) -> list[EvalExample]:
-    """Load and validate quantitative evaluation examples from JSONL."""
+    """Load prepared evaluation examples from JSONL."""
 
     examples: list[EvalExample] = []
     user_lines: dict[str, int] = {}
@@ -144,9 +141,7 @@ def load_evaluation_examples(path: Path) -> list[EvalExample]:
             for line_number, line in enumerate(input_file, start=1):
                 context = _record_context(path, line_number)
                 record = _load_json_object(line, path, line_number)
-                user_id = _require_nonempty_string(
-                    record, "user_id", context
-                )
+                user_id = _require_nonempty_string(record, "user_id", context)
 
                 if user_id in user_lines:
                     raise ValueError(
@@ -194,9 +189,7 @@ def load_saved_predictions(path: Path) -> dict[str, list[str]]:
             for line_number, line in enumerate(input_file, start=1):
                 context = _record_context(path, line_number)
                 record = _load_json_object(line, path, line_number)
-                user_id = _require_nonempty_string(
-                    record, "user_id", context
-                )
+                user_id = _require_nonempty_string(record, "user_id", context)
 
                 if user_id in user_lines:
                     raise ValueError(
@@ -364,12 +357,8 @@ def evaluate(
         per_example.append(result)
 
     aggregate = {
-        f"recall@{recall_k}": mean(
-            result.recall for result in per_example
-        ),
-        f"ndcg@{ndcg_k}": mean(
-            result.ndcg for result in per_example
-        ),
+        f"recall@{recall_k}": mean(result.recall for result in per_example),
+        f"ndcg@{ndcg_k}": mean(result.ndcg for result in per_example),
     }
 
     return aggregate, per_example
@@ -421,19 +410,14 @@ def save_results(
         "recall_k": recall_k,
         "ndcg_k": ndcg_k,
         "execution_mode": execution_mode,
-        "examples_file": (
-            str(examples_file) if examples_file is not None else None
-        ),
+        "examples_file": (str(examples_file) if examples_file is not None else None),
         "predictions_file": (
             str(predictions_file) if predictions_file is not None else None
         ),
         "number_of_short_rankings": number_of_short_rankings,
         "number_of_examples": len(per_example),
         "aggregate": aggregate,
-        "per_example": [
-            asdict(result)
-            for result in per_example
-        ],
+        "per_example": [asdict(result) for result in per_example],
     }
 
     output_path.write_text(
@@ -447,9 +431,7 @@ def save_results(
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
 
-    parser = argparse.ArgumentParser(
-        description="Run recommendation evaluation."
-    )
+    parser = argparse.ArgumentParser(description="Run recommendation evaluation.")
 
     parser.add_argument(
         "--recall-k",
@@ -548,9 +530,7 @@ def _validate_cli_args(
         "--data-origin",
     )
     missing_names = [
-        name
-        for name, value in zip(required_names, supplied_values)
-        if value is None
+        name for name, value in zip(required_names, supplied_values) if value is None
     ]
     if missing_names:
         parser.error(
