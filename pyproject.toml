@@ -9,7 +9,7 @@ description = "Retrieval, ranking, and trustworthy offline evaluation for recomm
 requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
-include = ["trustworthy_recsys*"]
+include = ["trustworthy_recsys*", "eval*"]
 
 [project.optional-dependencies]
 dev = [
