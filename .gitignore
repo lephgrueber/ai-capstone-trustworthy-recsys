@@ -16,3 +16,9 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+
+# MovieLens files currently stored beside the data modules
+trustworthy_recsys/data/ratings.csv
+trustworthy_recsys/data/movies.csv
+trustworthy_recsys/data/tags.csv
+trustworthy_recsys/data/links.csv
