@@ -29,12 +29,11 @@ ai-capstone-trustworthy-recsys/
 ├── data/
 │   ├── golden_set_50.jsonl               # Curated qualitative regression scenarios
 │   └── processed/
-│       └── movielens_phase1/             # Generated local run; Git-ignored
+│       └── <run_name>/                    # Generated local run; Git-ignored
 │           ├── DATA_CARD.md
 │           ├── schema.json
 │           ├── statistics.json
 │           ├── manifest.json
-│           ├── execution_provenance.json # Extra execution snapshot for this run
 │           ├── movies.parquet
 │           ├── links.parquet
 │           ├── tags.parquet
@@ -136,28 +135,78 @@ The shared interaction columns are `user_id`, `movie_id`, `rating`, and `timesta
 
 Both ratios use the same test period, but their training histories and warm-start populations differ. Scores over different populations should not be treated as a controlled model comparison. See the run instructions and Data Card for the full eligibility rules.
 
-The completed local run is under `data/processed/movielens_phase1/`:
+Each completed local run under `data/processed/<run_name>/` contains:
 
-- [Data Card](data/processed/movielens_phase1/DATA_CARD.md): overview, provenance, usage terms, structure, splits, limitations, and risks.
-- [Statistics](data/processed/movielens_phase1/statistics.json): dataset quality, preprocessing counts, split sizes, cold-start coverage, and evaluation exclusions.
-- [Schema](data/processed/movielens_phase1/schema.json): field types and evaluation contracts.
-- [Manifest](data/processed/movielens_phase1/manifest.json): configuration, environment versions, source/code/output hashes, and validation results.
+- **Data Card** — `data/processed/<run_name>/DATA_CARD.md`: overview, provenance, usage terms, structure, splits, limitations, and risks.
+- **Statistics** — `data/processed/<run_name>/statistics.json`: dataset quality, preprocessing counts, split sizes, cold-start coverage, and evaluation exclusions.
+- **Schema** — `data/processed/<run_name>/schema.json`: field types and evaluation contracts.
+- **Manifest** — `data/processed/<run_name>/manifest.json`: configuration, environment versions, source/code/output hashes, and validation results.
 
-These generated links work when the local run exists. New runs produce the same core reports. A run is complete only when `manifest.json` exists and the `INCOMPLETE` marker is absent.
+These generated paths are available when the local run exists. New runs produce the same core reports. A run is complete only when `manifest.json` exists and the `INCOMPLETE` marker is absent.
 
 ## Evaluation harness and golden set
 
-To check the harness end to end with its three deterministic synthetic examples:
+`eval/harness.py` combines pipeline-generated evaluation examples with separately generated recommendation rankings, scores the rankings with Recall@K and binary NDCG@K, and writes timestamped JSON results. It does not generate recommendations. The harness is model-agnostic and split-agnostic: the supplied examples file determines the split and evaluation population being scored.
 
-```powershell
-.\.venv\Scripts\python.exe -m eval.harness
+### Input and prediction format
+
+A pipeline-generated evaluation example has this form:
+
+```json
+{"user_id":"123","history_items":["1","50"],"relevant_items":["260"]}
 ```
 
-The harness prints aggregate Recall@K and NDCG@K and writes aggregate scores, per-example results, and run metadata to a timestamped JSON file under `results/smoke/`. Synthetic results check the evaluation plumbing; they are not model-quality measurements.
+A separately generated prediction row is:
 
-For real evaluation, provide a generated examples file and a separately produced model-predictions file. Examples have `user_id`, `history_items`, and `relevant_items`; predictions have `user_id` and `ranked_items`. All IDs must be strings, prediction users must match the examples exactly, and ranked items must not repeat. A full command is provided in [the evaluation instructions](docs/data_pipeline.md#how-the-examples-connect-to-the-evaluator).
+```json
+{"user_id":"123","ranked_items":["318","356","527"]}
+```
 
-The [golden set](data/golden_set_50.jsonl) contains 50 synthetic, catalog-grounded scenarios: 15 golden-path, 20 representative, and 15 hard-edge cases. It is intended for qualitative regression review. Its `reference_items` illustrate expected behavior and must not be used as quantitative relevance labels. The data pipeline leaves this file unchanged.
+Prediction users must match evaluation users. Item IDs are strings, and ranked items must be unique and ordered highest-ranked first. Row order does not matter because the evaluator matches by `user_id`; short or empty rankings are accepted and scored without padding. See the Data Pipeline and Data Card section above for evaluation-population and label-construction details.
+
+### Metrics and evaluation protocol
+
+**Recall@K** measures the fraction of held-out relevant movies appearing in the top K recommendations. **Binary NDCG@K** gives more credit when held-out relevant movies appear nearer the top of the ranking. Their cutoffs are independently configurable; the intended project evaluation uses **Recall@100** and **NDCG@10** on one supplied ranked list.
+
+Use a validation split for development evaluation and keep the test split held out for final evaluation. The harness does not enforce validation versus test; maintaining that separation is evaluation protocol discipline.
+
+### Commands
+
+Run the deterministic synthetic smoke check with:
+
+```bash
+.venv/bin/python -m eval.harness
+```
+
+Its expected output is:
+
+```text
+Recall@10 = 1.0000
+NDCG@10   = 0.7606
+```
+
+For a saved-prediction evaluation, use:
+
+```bash
+.venv/bin/python -m eval.harness \
+  --examples-file data/processed/<run_name>/<split_scenario>/validation_warm.jsonl \
+  --predictions-file <predictions.jsonl> \
+  --dataset movielens-32m \
+  --split <validation_split_label> \
+  --recommender-name <recommender_name> \
+  --data-origin observed \
+  --recall-k 100 \
+  --ndcg-k 10 \
+  --output-dir results/<recommender_name>
+```
+
+`validation_warm.jsonl` is one example evaluation population; another pipeline-generated validation artifact can be supplied. Replace the placeholder paths and labels with those for the evaluation run being scored.
+
+Each run writes a timestamped JSON file containing run metadata, aggregate Recall/NDCG scores, and per-example rankings and scores.
+
+### Golden set
+
+[`data/golden_set_50.jsonl`](data/golden_set_50.jsonl) contains 50 curated synthetic recommendation cases: 15 `golden_path`, 20 `representative`, and 15 `hard_edge`. It is intended for qualitative and regression review and remains separate from quantitative MovieLens validation evaluation. Its `reference_items` are illustrative reviewer guidance, not quantitative relevance labels, and must not be used to calculate Recall@K or NDCG@K.
 
 ## Tests and reproducibility
 
