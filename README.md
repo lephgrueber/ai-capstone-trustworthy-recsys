@@ -14,9 +14,12 @@ The repository currently includes:
 - A runnable Python pipeline for source validation, preprocessing, temporal splitting, and evaluation-example exports.
 - Generated dataset/split statistics, schemas, provenance metadata, and a Data Card.
 - An evaluation harness with Recall@K and binary NDCG@K, plus synthetic and saved-prediction modes.
+- A uniform-random baseline recommender for the harness's `Recommender` callable API.
+- Popularity baselines (all-time, recent-window, and Bayesian-average top-rated) for the same API.
+- A genre-aware baseline that boosts popular movies matching each user's genre history.
 - A curated 50-case qualitative golden set and automated tests.
 
-The baseline model files and evaluation-slice file are still placeholders. The two-tower model, ANN index, LambdaRank reranker, user interface, and policy-value estimators have not been implemented. MovieLens does not supply the logged propensities needed for the planned IPS/SNIPS/DR experiments; that work requires a separate suitable evaluation dataset.
+Uniform-random, popularity, and genre-aware baseline recommenders are implemented; the KNN baseline model file and the evaluation-slice file are still placeholders. The two-tower model, ANN index, LambdaRank reranker, user interface, and policy-value estimators have not been implemented. MovieLens does not supply the logged propensities needed for the planned IPS/SNIPS/DR experiments; that work requires a separate suitable evaluation dataset.
 
 ## Project structure
 
@@ -58,8 +61,11 @@ ai-capstone-trustworthy-recsys/
 │   └── test_smoke.py
 ├── trustworthy_recsys/
 │   ├── baselines/
+│   │   ├── genre.py                     # Genre-weighted popularity recommender
 │   │   ├── knn.py                       # Placeholder
-│   │   └── popularity.py                # Placeholder
+│   │   ├── popularity.py                # Popularity and top-rated recommenders
+│   │   ├── predict.py                   # Write baseline predictions for the harness
+│   │   └── random_baseline.py           # Uniform-random recommender
 │   ├── data/
 │   │   ├── audit.py                     # Source integrity and full ratings audit
 │   │   ├── preprocess.py                # Metadata, tag cleaning, and Parquet conversion
