@@ -26,16 +26,15 @@ The current local CSVs are under `trustworthy_recsys/data/`. A dedicated
 `data/raw/ml-32m/` directory is also supported by passing its path. No input file
 is moved, edited, or deleted.
 
-## Run both ratio comparisons
+## Run the 80/10/10 temporal split
 
 ```powershell
 .\.venv\Scripts\python.exe -m trustworthy_recsys.data.pipeline --raw-dir trustworthy_recsys/data --output-dir data/processed/movielens_phase1
 ```
 
-This runs **both 80/10/10 and 70/20/10** by default. These are chronological
-fractions of rating records, not random splits or fractions of users. The 70%
-and 80% boundaries differ, but the shared 90% boundary gives both runs identical
-test events. Ratio boundaries fall at midnight after the UTC day containing the
+This generates **80/10/10** by default. These are chronological
+fractions of rating records, not random splits or fractions of users.
+Ratio boundaries fall at midnight after the UTC day containing the
 target cumulative count; whole days remain together, so proportions are approximate.
 
 The documented full release produces these boundaries:
@@ -43,7 +42,6 @@ The documented full release produces these boundaries:
 | Scenario | Validation begins, UTC | Test begins, UTC |
 |---|---|---|
 | `ratio_80_10_10` | 2018-10-04 | 2020-11-06 |
-| `ratio_70_20_10` | 2016-10-14 | 2020-11-06 |
 
 Choose a **new output directory for every run**. Existing directories are refused,
 including incomplete runs, so successful artifacts cannot be silently replaced.
@@ -52,13 +50,7 @@ an `INCOMPLETE` marker. A successful run contains `manifest.json` and no marker.
 
 ## Other configurations
 
-To generate only 70/20/10:
-
-```powershell
-.\.venv\Scripts\python.exe -m trustworthy_recsys.data.pipeline --raw-dir trustworthy_recsys/data --output-dir data/processed/only_70_20_10 --ratios 0.7 0.2 0.1
-```
-
-Repeat `--ratios` to compare additional choices. To use explicit calendar dates:
+The project uses the default ratio. For an experiment with explicit calendar dates:
 
 ```powershell
 .\.venv\Scripts\python.exe -m trustworthy_recsys.data.pipeline --raw-dir trustworthy_recsys/data --output-dir data/processed/calendar_2020_2022 --validation-start 2020-01-01 --test-start 2022-01-01
@@ -84,7 +76,7 @@ selection. The implementation also keeps user/item counts and the largest
 individual user's history in memory. Final contract validation loads one
 evaluation population at a time through the harness; this is not a constant-memory
 operation. Expect several minutes and roughly gigabytes of output space for the
-full two-scenario run. Exact resource use depends on the environment.
+full data run. Exact resource use depends on the environment.
 
 ## Generated artifacts
 
@@ -109,8 +101,6 @@ movielens_phase1/
     validation_warm.jsonl
     test_all.jsonl
     test_warm.jsonl
-  ratio_70_20_10/
-    ...same scenario-specific files...
 ```
 
 Read the generated **DATA_CARD.md** for the overview, provenance, usage terms,

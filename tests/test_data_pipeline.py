@@ -109,14 +109,22 @@ class PipelineTests(unittest.TestCase):
             audit_ratings(self.raw/'ratings.csv',set(range(1,7)),1)
         self.assertFalse((self.root/'run').exists())
 
-    def test_quantile_cutoffs_keep_whole_days_and_shared_test_period(self):
+    def test_default_run_produces_only_the_project_split(self):
+        self.write_ratings([(u, i, r, day) for day, (u, i, r, _) in enumerate(self.records, 1)])
+        self.refresh_manifest()
+        output = self.root/'default_run'
+        run_pipeline(self.raw, output, self.manifest, self.readme,
+                     chunk_size=2, dataset_name='test-fixture')
+        stats = json.loads((output/'statistics.json').read_text())
+        self.assertEqual(set(stats['splits']), {'ratio_80_10_10'})
+        self.assertEqual({p.name for p in output.iterdir() if p.is_dir()}, {'ratio_80_10_10'})
+
+    def test_quantile_cutoffs_keep_whole_days(self):
         day = stamp(1)//86400
         days = {day:70,day+1:10,day+2:10,day+3:10}
         a = choose_cutoffs(days,(.8,.1,.1))
-        b = choose_cutoffs(days,(.7,.2,.1))
         self.assertEqual(a,(stamp(3),stamp(4)))
-        self.assertEqual(b,(stamp(2),stamp(4)))
-        with self.assertRaises(ValueError):choose_cutoffs(days,(.7,.2,.2))
+        with self.assertRaises(ValueError):choose_cutoffs(days,(.8,.1,.2))
         with self.assertRaises(ValueError):choose_cutoffs(days,explicit=('2020-01-05','2020-01-03'))
 
 

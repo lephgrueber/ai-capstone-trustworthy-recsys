@@ -42,7 +42,7 @@ def run_pipeline(raw_dir, output_dir, checksum_file, source_readme, *, ratios=No
     audit = audit_ratings(raw/"ratings.csv", movie_ids, chunk_size)
     if dataset_name == "movielens-32m" and (audit.summary["rows"], audit.summary["users"], len(movies)) != (32_000_204, 200_948, 87_585):
         raise ValueError("Source counts do not match MovieLens 32M; specify an accurate dataset name for other data")
-    ratios = ratios if ratios is not None else [(0.8, 0.1, 0.1), (0.7, 0.2, 0.1)]
+    ratios = ratios if ratios is not None else [(0.8, 0.1, 0.1)]
     configs = [("calendar", None)] if explicit is not None else [
         ("ratio_" + "_".join(f"{x*100:g}".replace(".", "p") for x in ratio), ratio) for ratio in ratios]
     if not configs or len({name for name, _ in configs}) != len(configs):
@@ -131,7 +131,7 @@ def main():
     parser.add_argument("--output-dir", type=Path, required=True, help="New output directory; existing runs are never overwritten")
     parser.add_argument("--checksums", type=Path, default=Path("checksums.txt"))
     parser.add_argument("--source-readme", type=Path, default=Path("README.txt"))
-    parser.add_argument("--ratios", nargs=3, type=float, action="append", help="Repeat for multiple ratios; default is both 80/10/10 and 70/20/10")
+    parser.add_argument("--ratios", nargs=3, type=float, action="append", help="Optional custom ratios; default is 80/10/10")
     parser.add_argument("--validation-start", help="Explicit UTC cutoff (requires --test-start)")
     parser.add_argument("--test-start", help="Explicit UTC cutoff (requires --validation-start)")
     parser.add_argument("--positive-threshold", type=float, default=4.0)

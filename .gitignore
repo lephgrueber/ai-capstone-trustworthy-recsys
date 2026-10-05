@@ -10,6 +10,8 @@ build/
 
 # Generated smoke-test output
 results/smoke/*.json
+artifacts/retrieval/
+results/retrieval/
 
 # Local datasets
 data/raw/*

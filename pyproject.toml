@@ -17,6 +17,10 @@ dependencies = [
 include = ["trustworthy_recsys*", "eval*"]
 
 [project.optional-dependencies]
+retrieval = ["torch>=2.6,<3", "weaviate-client==4.23.1"]
 dev = [
     "pytest>=8.0",
 ]
+
+[tool.pytest.ini_options]
+markers = ["integration: requires a running local Weaviate instance"]

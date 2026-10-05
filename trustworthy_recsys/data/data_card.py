@@ -98,6 +98,8 @@ def render_data_card(output, dataset_name, audit, metadata, tags, splits, config
               "- **Comparison scope:** data coverage does not establish which split yields better recommendation quality. "
               "If both models are refit on train+validation at a shared test boundary, recompute eligibility and coverage for that protocol.", "",
               "## Reproduction and related artifacts", "",
+              "The optional trustworthy_recsys.data.retrieval_inputs stage produces a separate model-ready Data Card, schema, statistics in metadata.json, and hash manifest. "
+              "It fits mappings on training data and constructs strictly earlier positive contexts. The source split artifacts remain immutable.", "",
               "See manifest.json for the exact configuration, input/output hashes, software versions, and code revision/source hashes. "
               "See statistics.json for complete partition and eligibility counts and schema.json for output contracts. "
               "A successful run ends with manifest.json and no INCOMPLETE marker. "

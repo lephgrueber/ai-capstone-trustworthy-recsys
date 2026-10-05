@@ -42,4 +42,5 @@ def describe():
         },
         "ids": "Original decimal IDs represented as strings; no fitted ID remapping.",
         "split_rule": "train < validation_start <= validation < test_start <= test; UTC",
+        "retrieval_extension": "The retrieval_inputs command writes a separate schema.json for train-only ID mappings, float32 features, target pairs and CSR histories; original string IDs remain the evaluation contract.",
     }
