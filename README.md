@@ -171,6 +171,8 @@ These generated paths are available when the local run exists. New runs produce 
 
 ## Two-tower retrieval
 
+**Teammates can use the saved model without retraining.** Download the Git LFS bundle at `models/two_tower_80_v1.zip` and follow [the team setup guide](docs/team_model_setup.md). It includes weights, movie embeddings, training configuration, mappings, manifests and the complete prepared inputs needed by the loader. After extraction, import the saved vectors into your own local Weaviate instance once.
+
 Install the optional training/index dependencies with `python -m pip install -e ".[dev,retrieval]"` in your virtual environment. The runnable stages are:
 
 ```powershell

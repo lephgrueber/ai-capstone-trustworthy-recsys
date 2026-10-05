@@ -12,6 +12,7 @@ build/
 results/smoke/*.json
 artifacts/retrieval/
 results/retrieval/
+data/downloads/
 
 # Local datasets
 data/raw/*

@@ -4,6 +4,8 @@ This extends the completed data pipeline with model inputs, training, Weaviate e
 
 ## Install and run
 
+To use the existing trained checkpoint, follow [the team download/setup guide](team_model_setup.md). The versioned Git LFS bundle includes the model and prepared inputs, so you can skip preparation and training. The commands below are for rebuilding artifacts.
+
 Use Python 3.11 or later with PyTorch, the pinned Weaviate Python client, and Docker Desktop using Linux containers. From the repository root in PowerShell:
 
 ```powershell
@@ -95,4 +97,4 @@ Generated prediction rows use `{"user_id": "...", "ranked_items": ["..."]}`, so 
 
 ## Measured artifacts
 
-The published model and descriptor are Git-ignored under `artifacts/retrieval/two_tower_80_weaviate`; its search index lives in the Weaviate Docker volume. Full reports and predictions are Git-ignored under `results/retrieval/two_tower_80_weaviate`. Reviewable snapshots are in [retrieval_report.md](retrieval_report.md), [model_card_retrieval.md](model_card_retrieval.md), and [data_card_retrieval.md](data_card_retrieval.md). A fresh clone needs the source dataset and commands above to recreate the artifacts. Previous local model/report directories are preserved as historical provenance and are not the active serving backend.
+The working model and descriptor are Git-ignored under `artifacts/retrieval/two_tower_80_weaviate`; its search index lives in the Weaviate Docker volume. The distributable model and complete prepared inputs are packaged separately in `models/two_tower_80_v1.zip`, tracked with Git LFS, with an adjacent SHA-256 checksum. Full reports and predictions remain Git-ignored under `results/retrieval/two_tower_80_weaviate`. Reviewable snapshots are in [retrieval_report.md](retrieval_report.md), [model_card_retrieval.md](model_card_retrieval.md), and [data_card_retrieval.md](data_card_retrieval.md). A fresh clone can download the trained bundle and populate a local database without the raw dataset or retraining. Previous local model/report directories are preserved as historical provenance and are not the active serving backend.
