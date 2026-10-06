@@ -30,7 +30,9 @@ class RetrievalComponent(Protocol):
 class RerankingComponent(Protocol):
     info: ComponentInfo
 
-    def rerank(self, query: ModelQuery, candidates: CandidateBatch, limit: int) -> RankingResult: ...
+    def rerank(
+        self, query: ModelQuery, candidates: CandidateBatch, limit: int
+    ) -> RankingResult: ...
 
 
 @dataclass(frozen=True)
@@ -42,11 +44,16 @@ class BaselineRetrievalAdapter:
     supported_ids: frozenset[str]
 
     def retrieve(self, query: ModelQuery, limit: int) -> CandidateBatch:
-        supported_history = [item for item in query.history_items if item in self.supported_ids]
+        supported_history = [
+            item for item in query.history_items if item in self.supported_ids
+        ]
         warnings = []
         if len(supported_history) != len(query.history_items):
             warnings.append("Unsupported history items were ignored by retrieval.")
-        request = BaselineRequest(user_id=query.known_user_id or "new-visitor", history_items=supported_history)
+        request = BaselineRequest(
+            user_id=query.known_user_id or "new-visitor",
+            history_items=supported_history,
+        )
         ids = list(self.recommender(request, limit))
         # The baseline exposes IDs only. Missing scores intentionally remain null.
         return CandidateBatch(
@@ -64,12 +71,19 @@ class FixtureRetrieval(BaselineRetrievalAdapter):
         for position, movie_id in enumerate(catalog.movies):
             for user in range(max(1, len(catalog.movies) - position)):
                 rows.append(
-                    {"user_id": f"fixture-{user}", "movie_id": movie_id, "rating": 4.0, "timestamp_utc": pd.Timestamp("2026-01-01", tz="UTC")}
+                    {
+                        "user_id": f"fixture-{user}",
+                        "movie_id": movie_id,
+                        "rating": 4.0,
+                        "timestamp_utc": pd.Timestamp("2026-01-01", tz="UTC"),
+                    }
                 )
         recommender = fit_genre(pd.DataFrame(rows), catalog.as_frame(), alpha=1.0)
         return cls(
             recommender=recommender,
-            info=ComponentInfo(name="fixture-genre-retrieval", version="1.0.0", mode="fixture"),
+            info=ComponentInfo(
+                name="fixture-genre-retrieval", version="1.0.0", mode="fixture"
+            ),
             supported_ids=catalog.supported_ids,
         )
 
@@ -90,7 +104,9 @@ class LearnedRetrievalAdapter:
 
             recommender = RetrievalRecommender.load(inputs_dir, model_dir)
         except Exception as error:
-            raise ValueError(f"could not load learned retrieval artifacts: {error}") from error
+            raise ValueError(
+                f"could not load learned retrieval artifacts: {error}"
+            ) from error
         descriptor = recommender.index.descriptor
         fingerprint = descriptor.get("fingerprint", "unknown")
         return cls(
@@ -104,20 +120,28 @@ class LearnedRetrievalAdapter:
         )
 
     def retrieve(self, query: ModelQuery, limit: int) -> CandidateBatch:
-        supported_history = [item for item in query.history_items if item in self.supported_ids]
+        supported_history = [
+            item for item in query.history_items if item in self.supported_ids
+        ]
         warnings = []
         if len(supported_history) != len(query.history_items):
-            warnings.append("Unsupported history items were ignored by learned retrieval.")
+            warnings.append(
+                "Unsupported history items were ignored by learned retrieval."
+            )
         request = BaselineRequest(
             user_id=query.known_user_id or "__new_visitor__",
             history_items=supported_history,
         )
         indices, fallback = self.recommender.recommend_indices(request, limit)
         if fallback:
-            warnings.append("Popularity fallback used because no supported history items were supplied.")
+            warnings.append(
+                "Popularity fallback used because no supported history items were supplied."
+            )
         return CandidateBatch(
             candidates=[
-                ScoredMovie(movie_id=self.recommender.inputs.item_ids[index], score=None)
+                ScoredMovie(
+                    movie_id=self.recommender.inputs.item_ids[index], score=None
+                )
                 for index in indices
             ],
             component=self.info,
@@ -136,7 +160,9 @@ class PassThroughReranker:
         )
     )
 
-    def rerank(self, query: ModelQuery, candidates: CandidateBatch, limit: int) -> RankingResult:
+    def rerank(
+        self, query: ModelQuery, candidates: CandidateBatch, limit: int
+    ) -> RankingResult:
         return RankingResult(
             items=candidates.candidates[:limit],
             component=self.info,
@@ -146,14 +172,18 @@ class PassThroughReranker:
 
 @dataclass(frozen=True)
 class ExternalRetrievalAdapter:
-    """Sample adapter for Tolu's callable; validation occurs at this boundary."""
+    """Sample adapter for retrieval callable; validation occurs at this boundary."""
 
     callable: Callable[[ModelQuery, int], CandidateBatch | dict]
     info: ComponentInfo
 
     def retrieve(self, query: ModelQuery, limit: int) -> CandidateBatch:
         raw = self.callable(query, limit)
-        return raw if isinstance(raw, CandidateBatch) else CandidateBatch.model_validate(raw)
+        return (
+            raw
+            if isinstance(raw, CandidateBatch)
+            else CandidateBatch.model_validate(raw)
+        )
 
 
 @dataclass(frozen=True)
@@ -163,11 +193,17 @@ class ExternalRerankingAdapter:
     callable: Callable[[ModelQuery, CandidateBatch, int], RankingResult | dict]
     info: ComponentInfo
 
-    def rerank(self, query: ModelQuery, candidates: CandidateBatch, limit: int) -> RankingResult:
+    def rerank(
+        self, query: ModelQuery, candidates: CandidateBatch, limit: int
+    ) -> RankingResult:
         raw = self.callable(query, candidates, limit)
-        result = raw if isinstance(raw, RankingResult) else RankingResult.model_validate(raw)
+        result = (
+            raw if isinstance(raw, RankingResult) else RankingResult.model_validate(raw)
+        )
         candidate_ids = {item.movie_id for item in candidates.candidates}
-        introduced = [item.movie_id for item in result.items if item.movie_id not in candidate_ids]
+        introduced = [
+            item.movie_id for item in result.items if item.movie_id not in candidate_ids
+        ]
         if introduced:
             raise ValueError(f"reranker introduced candidate IDs: {introduced}")
         if len(result.items) > limit:
@@ -175,11 +211,15 @@ class ExternalRerankingAdapter:
         return result
 
 
-def build_baseline_retrieval(run_dir, scenario: str, catalog: Catalog) -> BaselineRetrievalAdapter:
+def build_baseline_retrieval(
+    run_dir, scenario: str, catalog: Catalog
+) -> BaselineRetrievalAdapter:
     recommender = build_recommender("genre", run_dir, scenario)
     return BaselineRetrievalAdapter(
         recommender=recommender,
-        info=ComponentInfo(name="genre-baseline", version="repository-0.1.0", mode="baseline"),
+        info=ComponentInfo(
+            name="genre-baseline", version="repository-0.1.0", mode="baseline"
+        ),
         supported_ids=frozenset(recommender.items),
     )
 
