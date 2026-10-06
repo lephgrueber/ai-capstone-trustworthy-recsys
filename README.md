@@ -6,7 +6,7 @@ Developed for CIS 5980: AI Capstone at the University of Pennsylvania under the 
 
 ## Project and current status
 
-The system now retrieves candidate movies using a trained two-tower model and approximate nearest-neighbor search. The planned next components are LambdaRank reranking and a user-facing interface. The broader evaluation plan includes direct method (DM), inverse propensity scoring (IPS), self-normalized IPS (SNIPS), and doubly robust (DR) estimation.
+The repository now contains a two-tower retrieval implementation with Weaviate-backed nearest-neighbor search and a user-facing application. FastAPI supports credential-free fixtures, a local MovieLens genre baseline, or a verified published two-tower model. LambdaRank reranking remains future work. The broader evaluation plan includes direct method (DM), inverse propensity scoring (IPS), self-normalized IPS (SNIPS), and doubly robust (DR) estimation.
 
 The repository currently includes:
 
@@ -18,10 +18,11 @@ The repository currently includes:
 - Popularity baselines (all-time, recent-window, and Bayesian-average top-rated) for the same API.
 - A genre-aware baseline that boosts popular movies matching each user's genre history.
 - A curated 50-case qualitative golden set and automated tests.
-- Training-only model inputs, a trained CPU two-tower model, and Weaviate embedding storage/search.
+- A training-only model-input pipeline, CPU two-tower training/inference implementation, and Weaviate embedding storage/search.
 - Retrieval quality, latency, integrity, robustness and error-analysis reports, plus a retrieval Model Card.
+- An M3 movie-discovery application with a FastAPI inference boundary, responsive React/TypeScript frontend, explicit drawer-based personalization, and optional TMDB display-artwork enrichment.
 
-Uniform-random, popularity, genre-aware and two-tower retrieval are implemented. The evaluation-slice file remains a placeholder; retrieval-specific slices are implemented in the retrieval evaluator. LambdaRank, the user interface, and policy-value estimators are not implemented. MovieLens does not supply the logged propensities needed for the planned IPS/SNIPS/DR experiments; that work requires a separate suitable evaluation dataset.
+Uniform-random, popularity, genre-aware, and two-tower retrieval are implemented. The two-tower training, publication, evaluation, standalone prediction, and FastAPI learned-serving paths are present. A portable trained bundle is tracked through Git LFS; extracted and locally published runtime artifacts remain ignored. Retrieval-specific slices are implemented in the retrieval evaluator; the general evaluation-slice file remains a placeholder. LambdaRank, live language interpretation, and policy-value estimators are not implemented. MovieLens does not supply the logged propensities needed for the planned IPS/SNIPS/DR experiments; that work requires a separate suitable evaluation dataset.
 
 ## Project structure
 
@@ -51,11 +52,15 @@ ai-capstone-trustworthy-recsys/
 │   ├── retrieval_report.md              # Measured retrieval report snapshot
 │   ├── model_card_retrieval.md           # Retrieval Model Card snapshot
 │   ├── data_card_retrieval.md            # Model-ready Data Card snapshot
+│   ├── serving_contracts.md               # Application API and component contracts
+│   ├── application_testing.md             # Application and workload verification runbook
+│   ├── system_card.md                     # Draft application System Card
 │   └── milestone 1/
 │       ├── Trustworthy_Recommendation_System_Proposal.pdf
 │       └── Trustworthy_Recommendation_System_Pitch_Deck.pdf
 ├── eval/
 │   └── harness.py                       # Command-line evaluation and JSON reporting
+├── frontend/                             # React, TypeScript, Vite, and Playwright application
 ├── notebooks/
 │   └── eda.ipynb                        # Exploratory analysis and split comparisons
 ├── tests/
@@ -64,6 +69,7 @@ ai-capstone-trustworthy-recsys/
 │   ├── test_harness.py
 │   ├── test_metrics.py
 │   ├── test_retrieval.py                 # Temporal, training, ANN and harness integration
+│   ├── serving/                          # FastAPI contracts, service, artwork, and API tests
 │   └── test_smoke.py
 ├── trustworthy_recsys/
 │   ├── baselines/
@@ -95,6 +101,7 @@ ai-capstone-trustworthy-recsys/
 │   │   ├── recommender.py               # Harness-compatible callable and fallback
 │   │   ├── evaluate.py                  # Quality, timing, checks and error analysis
 │   │   └── model_card.py                # Generate the retrieval Model Card
+│   ├── serving/                          # FastAPI application and baseline/fixture adapters
 │   └── evaluation/
 │       ├── metrics.py                   # Recall@K and binary NDCG@K
 │       └── slices.py                    # Placeholder
@@ -110,7 +117,95 @@ ai-capstone-trustworthy-recsys/
 └── README.md
 ```
 
-The source CSVs, dataset documentation, and generated run are local artifacts; a fresh clone may not contain them. There is currently no `scripts/` directory. Evaluation result directories are created when the harness runs.
+The source CSVs, dataset documentation, and generated run are local artifacts; a fresh clone may not contain them. Evaluation result directories are created when the harness runs.
+
+## M3 application quick start
+
+The default fixture backend needs no MovieLens download, model artifact, credential, or external API.
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -e ".[dev,serve,app-dev]"
+cd frontend
+npm ci
+cd ..
+```
+
+Run the API and frontend in separate terminals from the repository root:
+
+```bash
+.venv/bin/python -m uvicorn trustworthy_recsys.serving.app:app --reload --host 127.0.0.1 --port 8000
+```
+
+```bash
+cd frontend
+npm run dev
+```
+
+Open `http://127.0.0.1:5173`. `GET http://127.0.0.1:8000/health` should report a running process and `/ready` should report `{"status":"ok","backend_mode":"fixture","detail":null}`. The UI labels synthetic fixture content and the pass-through “no learned reranking” component.
+
+Artwork enrichment is optional and display-only. The backend maps original MovieLens IDs through the active run's `links.parquet`, requests exact TMDB movie records, and returns validated poster and backdrop `image.tmdb.org` URLs. It never title-matches movies, changes recommendation order, or uses TMDB genres. Export a TMDB API Read Access Token in the API process when you want live artwork:
+
+```bash
+export TMDB_READ_ACCESS_TOKEN="<your-api-read-access-token>"
+```
+
+The service reads process environment variables and intentionally does **not** auto-load `.env`; `.env.example` is documentation only. Never put this token in a `VITE_*` variable. Without a token, recommendations, search, readiness, and neutral artwork fallbacks continue to work. See TMDB's [authentication](https://developer.themoviedb.org/docs/authentication-application), [image URL](https://developer.themoviedb.org/docs/image-basics), and [attribution](https://developer.themoviedb.org/docs/faq) guidance.
+
+To use the existing genre baseline, configure a completed local run that contains the agreed training split. It must have `manifest.json`, no `INCOMPLETE` marker, and `ratio_80_10_10/{train.parquet,train_item_ids.json}`:
+
+```bash
+TRUSTWORTHY_RECSYS_BACKEND=baseline \
+TRUSTWORTHY_RECSYS_RUN_DIR=data/processed/<completed_run> \
+TRUSTWORTHY_RECSYS_SCENARIO=ratio_80_10_10 \
+.venv/bin/python -m uvicorn trustworthy_recsys.serving.app:app --host 127.0.0.1 --port 8000
+```
+
+Only the training parquet is passed to the repository's existing genre fitter. Validation/test data and held-out labels are not request inputs. Selecting `learned` without compatible configured artifacts returns not-ready and never falls back.
+
+For learned serving, first extract and publish the [trained bundle](docs/team_model_setup.md), or use another verified local publication. Then configure the prepared inputs, published model, and the matching completed data run used for catalog titles/genres and optional TMDB mappings:
+
+```bash
+TRUSTWORTHY_RECSYS_BACKEND=learned \
+TRUSTWORTHY_RECSYS_RUN_DIR=data/processed/<matching-completed-run> \
+TRUSTWORTHY_RECSYS_RETRIEVAL_INPUTS_DIR=data/downloads/two_tower_80_v1/inputs \
+TRUSTWORTHY_RECSYS_RETRIEVAL_MODEL_DIR=artifacts/retrieval/team_80_weaviate \
+.venv/bin/python -m uvicorn trustworthy_recsys.serving.app:app --host 127.0.0.1 --port 8000
+```
+
+Startup verifies the input/model manifests, saved vectors, full remote Weaviate mapping, scenario, and catalog metadata hash. A mismatch makes `/ready` return 503; learned mode never silently changes to the genre baseline.
+
+This workspace has a completed ignored local example at `data/processed/m3_ratio_80_10_10_20261002`. It was generated with:
+
+```bash
+.venv/bin/python -m trustworthy_recsys.data.pipeline \
+  --raw-dir data/ml-32m \
+  --output-dir data/processed/m3_ratio_80_10_10_20261002 \
+  --checksums data/ml-32m/checksums.txt \
+  --source-readme data/ml-32m/README.txt \
+  --ratios 0.8 0.1 0.1
+```
+
+The manifest records 25,602,867 training, 3,198,273 validation, and 3,199,064 test interactions. All pipeline validation flags are true. Generated data stays Git-ignored and will not exist in a fresh clone.
+
+### Application schemas and checks
+
+```bash
+.venv/bin/python -m trustworthy_recsys.serving.export_openapi --output frontend/openapi.json
+cd frontend && npm run client:generate && cd ..
+.venv/bin/python -m pytest -q tests/serving
+cd frontend && npm test && npm run typecheck && npm run build && npm run test:e2e
+```
+
+Playwright may require the one-time `npx playwright install chromium`. The end-to-end test starts FastAPI against the completed local `m3_ratio_80_10_10_20261002` baseline run plus Vite; use backend/API tests for the credential-free fixture path when the local run is absent. Browser artwork tests use local mocked poster/backdrop responses, not live TMDB. See [serving contracts](docs/serving_contracts.md), [application plan](docs/application_plan.md), [test/workload runbook](docs/application_testing.md), and the [System Card draft](docs/system_card.md).
+
+Repeat the two fixture workloads with:
+
+```bash
+.venv/bin/python -m trustworthy_recsys.serving.workload --warmups 10 --repetitions 100 --output docs/application_workload_fixture.json
+```
+
+The report separates client round trip from server component/orchestration timing. Fixture timings are not learned/deployment evidence. The cost template records zero fixture API charges but leaves unknown compute and future interpreter costs as `null`.
 
 ## Quick start
 
@@ -185,7 +280,7 @@ docker compose up -d
 
 These paths are used by the local run; choose fresh destination names and a new collection name to rebuild. Preparation generates its own schema, statistics, provenance and Data Card. Training selects a checkpoint on validation only and saves weights and normalized movie embeddings. Publication imports those embeddings into a versioned Weaviate HNSW collection and verifies every stored ID/vector. Evaluation reports full-test and warm retrieval quality, a matched popularity baseline, latency including database requests, ANN agreement with exact search, integrity and robustness checks, and error cases.
 
-The existing trained model has already been published; you can run it without retraining or republishing. Start Docker Desktop, then:
+The portable trained model is stored through Git LFS. After following the team setup guide to extract and publish it—or when using an equivalent verified local publication—start Docker and invoke the standalone predictor with those paths:
 
 ```powershell
 docker compose up -d
@@ -196,7 +291,7 @@ Weaviate runs on loopback HTTP/gRPC ports 8080/50051 and persists embeddings in 
 
 The measured run uses 80/10/10 and at most four historical targets per training user. Empty histories use popularity, and unseen movies are outside the candidate index.
 
-Read the [run instructions](docs/retrieval.md), [retrieval report](docs/retrieval_report.md), [retrieval Model Card](docs/model_card_retrieval.md), and [model-ready Data Card](docs/data_card_retrieval.md). Binary artifacts and full prediction files remain local and Git-ignored.
+Read the [run instructions](docs/retrieval.md), [team model setup](docs/team_model_setup.md), [retrieval report](docs/retrieval_report.md), [retrieval Model Card](docs/model_card_retrieval.md), and [model-ready Data Card](docs/data_card_retrieval.md). Extracted/published artifacts and full prediction files remain local and Git-ignored; the distributable ZIP is tracked through Git LFS.
 
 The Weaviate run achieved all-user Recall@100 of **0.2335** versus **0.2227** for matched-policy popularity, and warm Recall@100 of **0.2403** versus **0.1613**. Learned-path p95 latency was **35.51 ms**, including database requests; validation top-100 agreement with exact search was **99.90%**. About 79% of test users require fallback, and long-tail recall remains a limitation. Results cover one split and seed; historical local-search timings are not Weaviate timings.
 

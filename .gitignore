@@ -8,17 +8,41 @@ __pycache__/
 build/
 *.egg-info/
 
+# Node / Vite / TypeScript generated files
+node_modules/
+dist/
+.vite/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.env
+.env.*
+!.env.example
+
 # Generated smoke-test output
 results/smoke/*.json
 artifacts/retrieval/
 results/retrieval/
 data/downloads/
 
+# Reproducible per-example prediction/evaluation outputs. Keep compact
+# summaries and RUN_NOTES.md visible for review.
+results/**/*.jsonl
+results/**/evaluation/*.json
+
 # Local datasets
 data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+data/ml-32m/
 
 # MovieLens files currently stored beside the data modules
 trustworthy_recsys/data/ratings.csv
