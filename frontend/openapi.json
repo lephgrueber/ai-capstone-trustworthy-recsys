@@ -1,0 +1,1038 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Trustworthy Recommendation System API",
+    "description": "M3 movie-discovery application and model integration contracts.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "summary": "Ready",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/search": {
+      "get": {
+        "summary": "Search Catalog",
+        "operationId": "search_catalog_api_v1_catalog_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/application/status": {
+      "get": {
+        "summary": "Application Status",
+        "operationId": "application_status_api_v1_application_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplicationStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/posters": {
+      "post": {
+        "summary": "Catalog Posters",
+        "operationId": "catalog_posters_api_v1_catalog_posters_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PosterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PosterResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recommendations": {
+      "post": {
+        "summary": "Recommendations",
+        "operationId": "recommendations_api_v1_recommendations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecommendationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Bad Gateway",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/refinements": {
+      "post": {
+        "summary": "Refinements",
+        "operationId": "refinements_api_v1_refinements_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefinementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/AppliedRefinement"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ClarificationRefinement"
+                    },
+                    {
+                      "$ref": "#/components/schemas/UnsupportedRefinement"
+                    },
+                    {
+                      "$ref": "#/components/schemas/UnavailableRefinement"
+                    }
+                  ],
+                  "title": "Response Refinements Api V1 Refinements Post",
+                  "discriminator": {
+                    "propertyName": "outcome",
+                    "mapping": {
+                      "applied": "#/components/schemas/AppliedRefinement",
+                      "clarification": "#/components/schemas/ClarificationRefinement",
+                      "unsupported": "#/components/schemas/UnsupportedRefinement",
+                      "unavailable": "#/components/schemas/UnavailableRefinement"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApplicationStatus": {
+        "properties": {
+          "backend_mode": {
+            "type": "string",
+            "title": "Backend Mode"
+          },
+          "model_label": {
+            "type": "string",
+            "title": "Model Label"
+          },
+          "data_source_label": {
+            "type": "string",
+            "title": "Data Source Label"
+          },
+          "refinement_available": {
+            "type": "boolean",
+            "title": "Refinement Available"
+          },
+          "poster_provider": {
+            "type": "string",
+            "const": "tmdb",
+            "title": "Poster Provider",
+            "default": "tmdb"
+          },
+          "posters_configured": {
+            "type": "boolean",
+            "title": "Posters Configured"
+          },
+          "available_genres": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Available Genres"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "backend_mode",
+          "model_label",
+          "data_source_label",
+          "refinement_available",
+          "posters_configured",
+          "available_genres"
+        ],
+        "title": "ApplicationStatus"
+      },
+      "AppliedRefinement": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "const": "applied",
+            "title": "Outcome",
+            "default": "applied"
+          },
+          "preference_revision": {
+            "type": "integer",
+            "title": "Preference Revision"
+          },
+          "preferences": {
+            "$ref": "#/components/schemas/PreferenceState"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "preference_revision",
+          "preferences",
+          "summary"
+        ],
+        "title": "AppliedRefinement"
+      },
+      "CatalogMovie": {
+        "properties": {
+          "movie_id": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "pattern": "^[^\\s]+$",
+            "title": "Movie Id"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "genres": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 30,
+            "title": "Genres"
+          },
+          "poster_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poster Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "movie_id",
+          "title"
+        ],
+        "title": "CatalogMovie"
+      },
+      "CatalogSearchResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogMovie"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "backend_mode": {
+            "type": "string",
+            "title": "Backend Mode"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "backend_mode"
+        ],
+        "title": "CatalogSearchResponse"
+      },
+      "ClarificationRefinement": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "const": "clarification",
+            "title": "Outcome",
+            "default": "clarification"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "title": "ClarificationRefinement"
+      },
+      "ComponentInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "fixture",
+              "baseline",
+              "learned",
+              "pass_through",
+              "external"
+            ],
+            "title": "Mode"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "version",
+          "mode"
+        ],
+        "title": "ComponentInfo"
+      },
+      "ErrorDetail": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "issues": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Issues"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "title": "ErrorDetail"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "PosterMetadata": {
+        "properties": {
+          "movie_id": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "pattern": "^[^\\s]+$",
+            "title": "Movie Id"
+          },
+          "tmdb_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tmdb Id"
+          },
+          "poster_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poster Url"
+          },
+          "backdrop_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backdrop Url"
+          },
+          "backdrop_url_small": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backdrop Url Small"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "missing",
+              "unavailable"
+            ],
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "movie_id",
+          "status"
+        ],
+        "title": "PosterMetadata"
+      },
+      "PosterRequest": {
+        "properties": {
+          "movie_ids": {
+            "items": {
+              "type": "string",
+              "maxLength": 32,
+              "minLength": 1,
+              "pattern": "^[^\\s]+$"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Movie Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "movie_ids"
+        ],
+        "title": "PosterRequest"
+      },
+      "PosterResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PosterMetadata"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "provider": {
+            "type": "string",
+            "const": "tmdb",
+            "title": "Provider",
+            "default": "tmdb"
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "configured"
+        ],
+        "title": "PosterResponse"
+      },
+      "PreferenceState": {
+        "properties": {
+          "history_items": {
+            "items": {
+              "type": "string",
+              "maxLength": 32,
+              "minLength": 1,
+              "pattern": "^[^\\s]+$"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "History Items"
+          },
+          "excluded_movie_ids": {
+            "items": {
+              "type": "string",
+              "maxLength": 32,
+              "minLength": 1,
+              "pattern": "^[^\\s]+$"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Excluded Movie Ids"
+          },
+          "include_genres": {
+            "items": {
+              "type": "string",
+              "maxLength": 64,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Include Genres"
+          },
+          "exclude_genres": {
+            "items": {
+              "type": "string",
+              "maxLength": 64,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Exclude Genres"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PreferenceState"
+      },
+      "RecommendationItem": {
+        "properties": {
+          "rank": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Rank"
+          },
+          "movie": {
+            "$ref": "#/components/schemas/CatalogMovie"
+          },
+          "retrieval_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieval Score"
+          },
+          "ranking_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ranking Score"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "rank",
+          "movie"
+        ],
+        "title": "RecommendationItem"
+      },
+      "RecommendationRequest": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Session Id"
+          },
+          "preference_revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Preference Revision"
+          },
+          "preferences": {
+            "$ref": "#/components/schemas/PreferenceState"
+          },
+          "result_count": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Result Count",
+            "default": 12
+          },
+          "known_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Known User Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id",
+          "preference_revision",
+          "preferences"
+        ],
+        "title": "RecommendationRequest"
+      },
+      "RecommendationResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "preference_revision": {
+            "type": "integer",
+            "title": "Preference Revision"
+          },
+          "recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendationItem"
+            },
+            "type": "array",
+            "title": "Recommendations"
+          },
+          "applied_preferences": {
+            "$ref": "#/components/schemas/PreferenceState"
+          },
+          "retrieval": {
+            "$ref": "#/components/schemas/ComponentInfo"
+          },
+          "reranker": {
+            "$ref": "#/components/schemas/ComponentInfo"
+          },
+          "backend_mode": {
+            "type": "string",
+            "title": "Backend Mode"
+          },
+          "partial": {
+            "type": "boolean",
+            "title": "Partial"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "timings": {
+            "$ref": "#/components/schemas/Timings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id",
+          "preference_revision",
+          "recommendations",
+          "applied_preferences",
+          "retrieval",
+          "reranker",
+          "backend_mode",
+          "partial",
+          "warnings",
+          "timings"
+        ],
+        "title": "RecommendationResponse"
+      },
+      "RefinementRequest": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Session Id"
+          },
+          "preference_revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Preference Revision"
+          },
+          "preferences": {
+            "$ref": "#/components/schemas/PreferenceState"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id",
+          "preference_revision",
+          "preferences",
+          "text"
+        ],
+        "title": "RefinementRequest"
+      },
+      "StatusResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "not_ready"
+            ],
+            "title": "Status"
+          },
+          "backend_mode": {
+            "type": "string",
+            "title": "Backend Mode"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "backend_mode"
+        ],
+        "title": "StatusResponse"
+      },
+      "Timings": {
+        "properties": {
+          "retrieval_ms": {
+            "type": "number",
+            "title": "Retrieval Ms"
+          },
+          "filtering_ms": {
+            "type": "number",
+            "title": "Filtering Ms"
+          },
+          "reranking_ms": {
+            "type": "number",
+            "title": "Reranking Ms"
+          },
+          "total_ms": {
+            "type": "number",
+            "title": "Total Ms"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "retrieval_ms",
+          "filtering_ms",
+          "reranking_ms",
+          "total_ms"
+        ],
+        "title": "Timings"
+      },
+      "UnavailableRefinement": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "const": "unavailable",
+            "title": "Outcome",
+            "default": "unavailable"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "UnavailableRefinement"
+      },
+      "UnsupportedRefinement": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "const": "unsupported",
+            "title": "Outcome",
+            "default": "unsupported"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "UnsupportedRefinement"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

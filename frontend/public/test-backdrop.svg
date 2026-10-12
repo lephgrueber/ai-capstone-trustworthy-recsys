@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="title description">
+  <title id="title">Test backdrop artwork</title>
+  <desc id="description">A wide geometric local test image used for repeatable browser checks.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#08111f"/>
+      <stop offset=".52" stop-color="#164e63"/>
+      <stop offset="1" stop-color="#1e293b"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#67e8f9" stop-opacity=".6"/>
+      <stop offset="1" stop-color="#0891b2" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1280" height="720" fill="url(#background)"/>
+  <circle cx="930" cy="305" r="290" fill="url(#glow)"/>
+  <circle cx="930" cy="305" r="155" fill="none" stroke="#a5f3fc" stroke-width="9" opacity=".8"/>
+  <path d="M760 530h340" stroke="#cbd5e1" stroke-width="7" opacity=".75"/>
+  <text x="930" y="590" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="48" font-weight="700" text-anchor="middle">TEST BACKDROP</text>
+  <text x="930" y="635" fill="#a5f3fc" font-family="system-ui, sans-serif" font-size="25" text-anchor="middle">LOCAL ARTWORK</text>
+</svg>
