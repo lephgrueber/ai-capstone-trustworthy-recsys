@@ -47,6 +47,8 @@ async function genre(user: ReturnType<typeof userEvent.setup>, kind: "Include" |
 describe("movie-first discovery", () => {
   it("loads empty-history recommendations once and focuses drawer search", async () => {
     const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    expect(screen.getByRole("status", { name: "Loading movies" })).toBeInTheDocument();
+    expect(document.querySelectorAll(".loading-card")).toHaveLength(6);
     expect(await screen.findByRole("heading", { name: "Explore movies" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Signal in the Fog", level: 1 })).toBeInTheDocument();
     expect(document.querySelector(".personalization-summary")).not.toBeInTheDocument();
@@ -58,8 +60,14 @@ describe("movie-first discovery", () => {
     expect(within(panel).getByRole("button", { name: "Include genres" })).toHaveTextContent("Include");
     expect(within(panel).getByRole("button", { name: "Include genres" })).not.toHaveTextContent("Include genres");
     expect(within(panel).getByRole("button", { name: "Avoid genres" })).toHaveTextContent("Avoid");
-    await user.type(search, "Signal"); await user.click(await within(panel).findByRole("option", { name: /Signal in the Fog/ }));
+    await user.type(search, "Signal"); const results = await within(panel).findByLabelText("Movie search results");
+    expect(within(results).queryByRole("listbox")).not.toBeInTheDocument();
+    expect(within(results).queryByRole("option")).not.toBeInTheDocument();
+    await user.click(await within(results).findByRole("button", { name: /Signal in the Fog/ }));
     expect(within(panel).getByRole("button", { name: "Remove Signal in the Fog" })).toBeInTheDocument();
+    await user.type(search, "Signal");
+    const selectedResults = await within(panel).findByLabelText("Movie search results");
+    expect(await within(selectedResults).findByRole("button", { name: /Signal in the Fog.*Selected/ })).toBeDisabled();
   });
 
   it("prevents Include/Avoid contradictions and supports undo/reset", async () => {
@@ -105,7 +113,11 @@ describe("movie-first discovery", () => {
   it("keeps hover and focus on the original tile without changing the hero", async () => {
     vi.stubGlobal("fetch", mockApi({ artwork: true })); const user = userEvent.setup(); render(<App />); await screen.findByRole("heading", { name: "Signal in the Fog", level: 1 });
     const secondCard = screen.getByRole("button", { name: "View details for Orbit House" }).closest("article")!;
-    fireEvent.mouseOver(secondCard); fireEvent.focus(secondCard);
+    expect(secondCard).not.toHaveAttribute("tabindex");
+    const cardButtons = within(secondCard).getAllByRole("button");
+    expect(cardButtons).toHaveLength(4);
+    cardButtons.forEach((button) => expect(button).not.toHaveAttribute("tabindex", "-1"));
+    fireEvent.mouseOver(secondCard); fireEvent.focus(cardButtons[0]);
     expect(document.querySelector(".expanded-preview")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Signal in the Fog", level: 1 })).toBeInTheDocument();
     await user.click(within(secondCard).getByRole("button", { name: "Details for Orbit House" }));
@@ -139,6 +151,21 @@ describe("movie-first discovery", () => {
     vi.stubGlobal("fetch", mockApi({ recommend: (revision, preferences) => rec(revision, preferences, []) })); render(<App />); expect(await screen.findByRole("heading", { name: "No recommendations found" })).toBeInTheDocument(); expect(screen.getByText("Try adjusting your genre preferences, or reset them to explore movies again.")).toBeInTheDocument(); expect(screen.getByRole("button", { name: "Edit preferences" })).toBeInTheDocument(); expect(screen.getByRole("button", { name: "Reset all" })).toBeInTheDocument(); expect(screen.queryByText(/bounded candidate|constraints were not relaxed/i)).not.toBeInTheDocument();
   });
 
+  it("replaces only opaque recommendation failures with friendly copy", async () => {
+    const base = mockApi();
+    const opaque = vi.fn((url: string | URL | Request, init?: RequestInit) => String(url).includes("recommendations") ? json({}, 500) : base(url, init));
+    vi.stubGlobal("fetch", opaque);
+    const view = render(<App />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("We couldn’t load movies. Please try again.");
+    expect(screen.queryByText("Request failed (500)")).not.toBeInTheDocument();
+    view.unmount();
+
+    const structured = vi.fn((url: string | URL | Request, init?: RequestInit) => String(url).includes("recommendations") ? json({ error: { code: "invalid_preferences", message: "Unknown movie IDs: 999" } }, 422) : base(url, init));
+    vi.stubGlobal("fetch", structured);
+    render(<App />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unknown movie IDs: 999");
+  });
+
   it("keeps unavailable text refinement in the drawer and backend details accurate", async () => {
     const baseline = { ...STATUS, backend_mode: "baseline", model_label: "Baseline model", data_source_label: "MovieLens 32M · ratio_80_10_10" }; vi.stubGlobal("fetch", mockApi({ status: baseline }));
     const user = userEvent.setup(); render(<App />); await screen.findByRole("heading", { name: "Explore movies" }); expect(screen.getByRole("banner")).not.toHaveTextContent("Baseline model"); expect(screen.queryByPlaceholderText("Keep the sci-fi, but leave out horror.")).not.toBeInTheDocument();
@@ -155,7 +182,7 @@ describe("movie-first discovery", () => {
 
   it("submits the drawer snapshot once and resets applied preferences once from the summary", async () => {
     const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />); await screen.findByRole("heading", { name: "Explore movies" });
-    const panel = await drawer(user); const search = within(panel).getByLabelText("Movies you like"); await user.type(search, "Signal"); await user.click(await within(panel).findByRole("option", { name: /Signal in the Fog/ })); await genre(user, "Include", "Drama");
+    const panel = await drawer(user); const search = within(panel).getByLabelText("Movies you like"); await user.type(search, "Signal"); await user.click(await within(panel).findByRole("button", { name: /Signal in the Fog.*Add/ })); await genre(user, "Include", "Drama");
     await user.click(within(panel).getByRole("button", { name: "Update recommendations" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Personalize your recommendations" })).not.toBeInTheDocument());
     const recommendationCalls = fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
@@ -170,5 +197,15 @@ describe("movie-first discovery", () => {
     expect(formatCatalogTitle("Princess Bride, The (1987)")).toEqual({ title: "The Princess Bride", year: "1987" });
     expect(formatCatalogTitle("A Very Long, Uncertain Title (2004)")).toEqual({ title: "A Very Long, Uncertain Title", year: "2004" });
     expect(formatCatalogTitle("Film, Maybe (1999)")).toEqual({ title: "Film, Maybe", year: "1999" });
+  });
+
+  it("separates a catalog year from the movie-details heading", async () => {
+    const datedMovie = { ...MOVIES[0], title: "Signal in the Fog (2004)" };
+    vi.stubGlobal("fetch", mockApi({ recommend: (revision, preferences) => rec(revision, preferences, [datedMovie]) }));
+    const user = userEvent.setup(); render(<App />);
+    await user.click(await screen.findByRole("button", { name: `View details for ${datedMovie.title}` }));
+    const details = screen.getByRole("dialog", { name: "Signal in the Fog" });
+    expect(details).toHaveClass("detail-panel");
+    expect(within(details).getByText("Year").nextElementSibling).toHaveTextContent("2004");
   });
 });

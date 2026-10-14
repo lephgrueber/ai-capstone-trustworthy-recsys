@@ -12,7 +12,7 @@ async function addToyStory(page: Page) {
   const search = drawer.getByLabel("Movies you like");
   await expect(search).toBeFocused();
   await search.fill("Toy Story (1995)");
-  await drawer.getByRole("option", { name: /Toy Story \(1995\)/ }).click();
+  await drawer.getByRole("button", { name: /Toy Story \(1995\).*Add/ }).click();
   await expect(drawer.getByRole("button", { name: "Remove Toy Story (1995)" })).toBeVisible();
   return drawer;
 }
@@ -67,9 +67,15 @@ test("cards keep direct actions and subtle emphasis without a floating preview",
   await expect.poll(async () => second.evaluate((element) => (element as HTMLElement).offsetTop)).toBe(before.y);
   await expect(page.locator(".feature-hero h1")).toHaveText(originalHero ?? "");
   await page.evaluate(() => window.scrollTo(0, 0));
-  await first.evaluate((element) => element.focus({ preventScroll: true }));
-  await expect(first).toBeFocused();
-  await expect(first.locator(".card-actions")).toHaveCSS("opacity", "1");
+  await page.mouse.move(1, 1);
+  await expect(first).toHaveCSS("transform", "none");
+  await expect(first).not.toHaveAttribute("tabindex");
+  for (const button of [first.getByRole("button", { name: /View details for/ }), first.getByRole("button", { name: /Details for/ }), first.getByRole("button", { name: /Add .* to favorites/ }), first.getByRole("button", { name: "Hide this movie" })]) {
+    await button.focus();
+    await expect(button).toBeFocused();
+    await expect(first.locator(".card-actions")).toHaveCSS("opacity", "1");
+    await expect(first).not.toHaveCSS("transform", "none");
+  }
   await first.getByRole("button", { name: /Details for/ }).click(); const details = page.getByRole("dialog"); await expect(details).toBeVisible(); await details.getByRole("button", { name: "Close details" }).click();
   await first.getByRole("button", { name: /Add .* to favorites/ }).click(); await expect(first.getByRole("button", { name: /is in favorites/ })).toBeDisabled();
   await second.getByRole("button", { name: "Hide this movie" }).click(); await expect(page.getByText("Pending changes. Update to apply them.")).toBeVisible();
@@ -88,6 +94,12 @@ test("one drawer update applies its exact pending preferences", async ({ page })
   const originalHero = await page.locator(".feature-hero h1").textContent();
   const drawer = await addToyStory(page); await chooseGenre(page, drawer, "Include", "Comedy"); await chooseGenre(page, drawer, "Avoid", "Horror");
   await expect(drawer.getByText(/Text refinement is coming soon/)).toHaveCount(0);
+  await expect(drawer.getByRole("button", { name: "Update recommendations" })).toHaveCSS("white-space", "nowrap");
+  expect(await drawer.evaluate((element) => {
+    const status = element.querySelector(".drawer-pending");
+    const actions = element.querySelector(".drawer-actions");
+    return Boolean(status && actions && (status.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING));
+  })).toBe(true);
   await page.screenshot({ path: `${screenshots}/movie-first-drawer-desktop.png` });
   await expect(page.locator(".feature-hero h1")).toHaveText(originalHero ?? "");
   const submissions = page.waitForRequest((request) => request.url().includes("/api/v1/recommendations") && request.method() === "POST");
@@ -148,10 +160,106 @@ test("update failure preserves pending edits and prior movies", async ({ page })
   await expect(page.getByRole("alert")).toContainText("Recommendations are temporarily unavailable."); await expect(page.locator(".feature-hero h1")).toHaveText(original ?? ""); await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
 });
 
+test("opaque failures use friendly copy while structured errors remain useful", async ({ page }) => {
+  await page.route("**/api/v1/recommendations", (route) => route.fulfill({ status: 500, contentType: "application/json", body: "{}" }));
+  await page.goto("/");
+  await expect(page.getByRole("alert")).toContainText("We couldn’t load movies. Please try again.");
+  await expect(page.getByText("Request failed (500)")).toHaveCount(0);
+
+  await page.unroute("**/api/v1/recommendations");
+  await page.route("**/api/v1/recommendations", (route) => route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ error: { code: "invalid_preferences", message: "Unknown movie IDs: 999" } }) }));
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByRole("alert")).toContainText("Unknown movie IDs: 999");
+});
+
+test("search choices use button semantics and keep selected results disabled", async ({ page }) => {
+  await page.goto("/");
+  const drawer = await openDrawer(page);
+  const search = drawer.getByLabel("Movies you like");
+  await search.fill("Toy Story (1995)");
+  await expect(drawer.getByRole("listbox")).toHaveCount(0);
+  await expect(drawer.getByRole("option")).toHaveCount(0);
+  await drawer.getByRole("button", { name: /Toy Story \(1995\).*Add/ }).click();
+  await search.fill("Toy Story (1995)");
+  await expect(drawer.getByRole("button", { name: /Toy Story \(1995\).*Selected/ })).toBeDisabled();
+});
+
+test("reduced motion keeps non-moving keyboard card emphasis", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/");
+  const first = page.locator(".portrait-card").first();
+  await first.getByRole("button", { name: /View details for/ }).focus();
+  await expect(first.locator(".card-actions")).toHaveCSS("opacity", "1");
+  await expect(first).toHaveCSS("transform", "none");
+  await expect(first).not.toHaveCSS("box-shadow", "none");
+});
+
+test("reduced motion presents a stable loading structure", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.route("**/api/v1/recommendations", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.continue();
+  });
+  await page.goto("/");
+  const loading = page.getByRole("status", { name: "Loading movies" });
+  await expect(loading).toBeVisible();
+  await expect(loading.locator(".loading-card")).toHaveCount(6);
+  await expect(loading.locator(".hero-skeleton")).toHaveCSS("animation-name", "none");
+});
+
+test("touch layouts provide minimum targets and safe-area-aware drawer actions", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const touchPage = await context.newPage();
+  await touchPage.route("**/api/v1/catalog/posters", async (route) => {
+    const body = JSON.parse(route.request().postData() ?? "{}") as { movie_ids?: string[] };
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ provider: "tmdb", configured: true, items: (body.movie_ids ?? []).map((movie_id) => ({ movie_id, tmdb_id: movie_id, poster_url: "/test-poster.svg", backdrop_url: null, backdrop_url_small: null, status: "available" })) }) });
+  });
+  await touchPage.goto("/");
+  const cardAction = touchPage.locator(".card-actions button").first();
+  await expect(cardAction).toBeVisible();
+  const cardActionBox = await cardAction.boundingBox();
+  expect(cardActionBox?.width).toBeGreaterThanOrEqual(44);
+  expect(cardActionBox?.height).toBeGreaterThanOrEqual(44);
+  for (const headerButton of await touchPage.locator(".header-actions button").all()) {
+    expect((await headerButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  }
+  const drawer = await openDrawer(touchPage);
+  await expect(drawer).toBeVisible();
+  const closeBox = await drawer.getByRole("button", { name: "Close personalization" }).boundingBox();
+  expect(closeBox?.width).toBeGreaterThanOrEqual(44);
+  expect(closeBox?.height).toBeGreaterThanOrEqual(44);
+  for (const control of await drawer.locator(".drawer-genre-buttons button, .drawer-actions button").all()) {
+    expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  }
+  const safeAreaRule = await touchPage.evaluate(() => {
+    const rules = [...document.styleSheets].flatMap((sheet) => {
+      try { return [...sheet.cssRules]; } catch { return []; }
+    });
+    return rules.find((rule) => rule.cssText.includes(".personalize-drawer .drawer-actions") && rule.cssText.includes("safe-area-inset-bottom"))?.cssText ?? "";
+  });
+  expect(safeAreaRule).toContain("safe-area-inset-bottom");
+  expect(await drawer.locator(".personalize-drawer").evaluate((element) => getComputedStyle(element).minHeight)).not.toBe("0px");
+  await drawer.getByRole("button", { name: "Close personalization" }).click();
+  await touchPage.getByRole("button", { name: "About" }).click();
+  const systemDetails = touchPage.getByText("System details");
+  expect((await systemDetails.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await touchPage.getByRole("button", { name: "Close details" }).click();
+  await touchPage.setViewportSize({ width: 800, height: 844 });
+  const next = touchPage.getByRole("button", { name: "Next Explore movies", exact: true });
+  await expect(next).toBeVisible();
+  const nextBox = await next.boundingBox();
+  expect(nextBox?.width).toBeGreaterThanOrEqual(44);
+  expect(nextBox?.height).toBeGreaterThanOrEqual(44);
+  await context.close();
+});
+
 test("mobile browsing and drawer avoid page overflow", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto("/"); await expect(page.locator(".feature-hero h1")).toBeVisible(); await expect(page.locator(".portrait-card").first()).toBeVisible();
+  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute("content", /viewport-fit=cover/);
   const mobileHero = await page.locator(".feature-hero").boundingBox(); expect(mobileHero?.x).toBeGreaterThanOrEqual(15); expect(parseFloat(await page.locator(".feature-hero").evaluate((element) => getComputedStyle(element).borderRadius))).toBeGreaterThanOrEqual(12);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   const drawer = await openDrawer(page); await expect(drawer).toBeVisible(); await expect(drawer.getByRole("button", { name: "Include genres" })).toHaveText("Include"); await expect(drawer.getByRole("button", { name: "Avoid genres" })).toHaveText("Avoid"); expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true); expect(await drawer.getByRole("button", { name: "Include genres" }).evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true); expect(await drawer.getByRole("button", { name: "Avoid genres" }).evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true); await page.screenshot({ path: `${screenshots}/movie-first-drawer-mobile.png` });
-  await drawer.getByRole("button", { name: "Close personalization" }).click(); const firstCard = page.locator(".portrait-card").first(); await firstCard.focus(); await expect(firstCard.locator(".card-actions")).toHaveCSS("opacity", "1"); await expect(page.locator(".expanded-preview")).toHaveCount(0); await page.screenshot({ path: `${screenshots}/movie-first-card-mobile.png` }); await page.locator(".card-art").first().dispatchEvent("click"); const details = page.getByRole("dialog"); await expect(details).toBeVisible(); await details.getByRole("button", { name: "Close details" }).click();
+  await drawer.getByRole("button", { name: "Close personalization" }).click(); const firstCard = page.locator(".portrait-card").first(); await expect(firstCard).not.toHaveAttribute("tabindex"); await firstCard.getByRole("button", { name: /View details for/ }).focus(); await expect(firstCard.locator(".card-actions")).toHaveCSS("opacity", "1"); await expect(page.locator(".expanded-preview")).toHaveCount(0); await page.screenshot({ path: `${screenshots}/movie-first-card-mobile.png` }); await page.locator(".card-art").first().dispatchEvent("click"); const details = page.getByRole("dialog"); await expect(details).toBeVisible(); await expect(details.locator(".detail-poster")).toBeVisible(); await details.getByRole("button", { name: "Close details" }).click();
+  await page.setViewportSize({ width: 390, height: 560 });
+  expect((await page.locator(".feature-hero").boundingBox())?.height).toBeLessThanOrEqual(370);
 });
