@@ -132,17 +132,19 @@ class LearnedRetrievalAdapter:
             user_id=query.known_user_id or "__new_visitor__",
             history_items=supported_history,
         )
-        indices, fallback = self.recommender.recommend_indices(request, limit)
+        indices, scores, fallback = self.recommender.recommend_scored(request, limit)
         if fallback:
             warnings.append(
                 "Popularity fallback used because no supported history items were supplied."
             )
+        # Cosine scores for learned candidates; popularity fallback has no comparable score.
+        scores = scores if scores is not None else [None] * len(indices)
         return CandidateBatch(
             candidates=[
                 ScoredMovie(
-                    movie_id=self.recommender.inputs.item_ids[index], score=None
+                    movie_id=self.recommender.inputs.item_ids[index], score=score
                 )
-                for index in indices
+                for index, score in zip(indices, scores, strict=True)
             ],
             component=self.info,
             warnings=warnings,

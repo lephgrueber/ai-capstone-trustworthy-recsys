@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 import trustworthy_recsys.serving.app as app_module
@@ -208,9 +209,11 @@ class FakeLearnedRecommender:
         )
         self.closed = False
 
-    def recommend_indices(self, request, limit):
-        ranked = [index for index in [1, 2, 0] if self.inputs.item_ids[index] not in request.history_items]
-        return ranked[:limit], not request.history_items
+    def recommend_scored(self, request, limit):
+        ranked = [index for index in [1, 2, 0] if self.inputs.item_ids[index] not in request.history_items][:limit]
+        if not request.history_items:
+            return ranked, None, True
+        return ranked, [0.9 - 0.1 * position for position in range(len(ranked))], False
 
     def close(self):
         self.closed = True
@@ -258,6 +261,7 @@ def test_learned_mode_loads_verified_adapter_and_serves_new_visitor(tmp_path, mo
     assert response.json()["backend_mode"] == "learned"
     assert response.json()["retrieval"]["mode"] == "learned"
     assert [item["movie"]["movie_id"] for item in response.json()["recommendations"]] == ["2", "3"]
+    assert [item["retrieval_score"] for item in response.json()["recommendations"]] == pytest.approx([0.9, 0.8])
     assert recommender.closed
 
 

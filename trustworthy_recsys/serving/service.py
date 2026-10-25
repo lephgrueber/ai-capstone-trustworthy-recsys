@@ -54,7 +54,8 @@ class RecommendationService:
         self.validate_preferences(request)
         query = ModelQuery(history_items=request.preferences.history_items, known_user_id=request.known_user_id)
         retrieval_started = time.perf_counter()
-        budget = min(self.candidate_budget, max(request.result_count * 4, request.result_count))
+        # The reranker sees the full configured pool; it is not scaled down by result_count.
+        budget = self.candidate_budget
         try:
             raw_candidates = self.retrieval.retrieve(query, budget)
             candidates = (
