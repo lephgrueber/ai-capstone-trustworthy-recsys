@@ -29,6 +29,7 @@ pnpm-debug.log*
 # Generated smoke-test output
 results/smoke/*.json
 artifacts/retrieval/
+artifacts/ranking/
 results/retrieval/
 data/downloads/
 
