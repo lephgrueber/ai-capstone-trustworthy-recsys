@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 
 import pandas as pd
 
@@ -13,11 +14,12 @@ from trustworthy_recsys.serving.contracts import CatalogMovie, PreferenceState
 class Catalog:
     movies: dict[str, CatalogMovie]
 
-    @property
+    # Cached: the catalog is immutable, and these are read per candidate on every request.
+    @cached_property
     def supported_ids(self) -> frozenset[str]:
         return frozenset(self.movies)
 
-    @property
+    @cached_property
     def genres(self) -> frozenset[str]:
         return frozenset(genre for movie in self.movies.values() for genre in movie.genres)
 

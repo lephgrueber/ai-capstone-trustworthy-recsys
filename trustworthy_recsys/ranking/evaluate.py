@@ -21,13 +21,13 @@ KS = (10, 20, 50)
 
 
 def user_metrics(labels, order_scores, sizes, relevant_counts, ks=KS):
-    """Per-user Recall@K and NDCG@K for one scoring of every user's candidates.
+    """Per-user Recall@K, NDCG@K, Precision@K and hit rate (any hit in the top K).
 
     Within each user, candidates are sorted by descending score; ties keep table order.
     """
     discounts = 1 / np.log2(np.arange(2, max(ks) + 2))
     ideal = np.cumsum(discounts)
-    out = {f"{metric}_at_{k}": np.empty(len(sizes)) for k in ks for metric in ("recall", "ndcg")}
+    out = {f"{metric}_at_{k}": np.empty(len(sizes)) for k in ks for metric in ("recall", "ndcg", "precision", "hit_rate")}
     start = 0
     for user, size in enumerate(sizes):
         block = slice(start, start + size)
@@ -37,6 +37,9 @@ def user_metrics(labels, order_scores, sizes, relevant_counts, ks=KS):
             hits = ranked[:k]
             out[f"recall_at_{k}"][user] = hits.sum() / relevant_counts[user]
             out[f"ndcg_at_{k}"][user] = (hits * discounts[:len(hits)]).sum() / ideal[min(relevant_counts[user], k) - 1]
+            # Precision divides by k even when fewer than k candidates exist.
+            out[f"precision_at_{k}"][user] = hits.sum() / k
+            out[f"hit_rate_at_{k}"][user] = float(hits.sum() > 0)
     return out
 
 
@@ -82,8 +85,9 @@ def evaluate(table_dir, model_dir, output, ks=KS, bootstrap=1000):
 
     sizes = group_sizes(data["user_id"])
     starts = np.concatenate([[0], np.cumsum(sizes)[:-1]])
+    threads = lightgbm_threads(4)
     booster = lgb.Booster(model_file=str(model_dir / "model.txt"))
-    scores = booster.predict(np.column_stack([data[name] for name in features]), num_threads=lightgbm_threads(4))
+    scores = booster.predict(np.column_stack([data[name] for name in features]), num_threads=threads)
     labels = data["label"].astype(float)
     relevant = data["user_relevant_count"][starts]
     methods = {
@@ -113,7 +117,7 @@ def evaluate(table_dir, model_dir, output, ks=KS, bootstrap=1000):
 
 
 def format_table(report, ks=KS):
-    names = [f"{metric}_at_{k}" for k in ks for metric in ("ndcg", "recall")]
+    names = [f"{metric}_at_{k}" for k in ks for metric in ("ndcg", "recall")] + ["precision_at_10", "hit_rate_at_10"]
     lines = ["| Method / users | Users | " + " | ".join(n.replace("_at_", "@") for n in names) + " |",
              "|---|---:|" + "---:|" * len(names)]
     for key, row in report["metrics"].items():

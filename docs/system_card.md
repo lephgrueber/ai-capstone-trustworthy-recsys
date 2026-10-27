@@ -17,13 +17,13 @@ The personalized learned path is:
 
 ```text
 React/Vite → FastAPI → two-tower/Weaviate retrieval
-→ hard filtering → pass-through reranking
+→ hard filtering → LambdaRank reranking (optional; pass-through otherwise)
 → final validation → recommendations with MovieLens metadata → UI
 ```
 
 The browser sends the submitted preference state with each recommendation request. Liked movies guide retrieval, while genre selections and hidden titles constrain the results. An empty history uses training-popularity fallback in learned mode.
 
-The current reranker preserves candidate order rather than applying LambdaRank. Preference refinement uses structured controls.
+When `TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR` is set, a LightGBM LambdaRank model reorders the top 500 two-tower candidates using training-period features: popularity, rating, release year, user activity, and user × movie crosses such as co-likes with the submitted favorites. Offline, it raised test NDCG@10 from 0.1057 to 0.1204 and Recall@10 from 0.0486 to 0.0657 (docs/ranking_report.md). It can only reorder candidates that already passed hard filtering. Without it, a pass-through reranker preserves retrieval order. Preference refinement uses structured controls.
 
 MovieLens supplies movie IDs, titles, and genres. The frontend requests optional TMDb posters and backdrops separately, allowing recommendations to appear before the images finish loading.
 

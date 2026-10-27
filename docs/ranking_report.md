@@ -19,16 +19,22 @@ LightGBM LambdaRank reranks the top 500 two-tower candidates for each user. This
 
 ## Test results (4,310 warm users)
 
-| Method | NDCG@10 | Recall@10 | NDCG@20 | Recall@20 | Recall@50 |
-|---|---:|---:|---:|---:|---:|
-| Pass-through (two-tower order) | 0.1057 | 0.0486 | 0.1074 | 0.0851 | 0.1599 |
-| **LambdaRank** | **0.1204** | **0.0657** | **0.1267** | **0.1119** | **0.1993** |
+| Method | NDCG@10 | Recall@10 | Precision@10 | Hit rate@10 | Recall@20 | Recall@50 |
+|---|---:|---:|---:|---:|---:|---:|
+| Pass-through (two-tower order) | 0.1057 | 0.0486 | 0.0913 | 0.428 | 0.0851 | 0.1599 |
+| **LambdaRank** | **0.1204** | **0.0657** | **0.1054** | **0.467** | **0.1119** | **0.1993** |
+
+Hit rate@10 is the share of users with at least one later-liked movie in their top 10.
+
+Recall@10 looks low partly because the median test user has 11 relevant movies and the mean is 27.7, while only 10 slots are scored. A perfect ranker with perfect retrieval would score 0.685.
 
 | LambdaRank − pass-through | Mean | 95% paired-bootstrap CI |
 |---|---:|---|
 | NDCG@10 | +0.0147 (+14%) | [+0.0104, +0.0191] |
 | Recall@10 | +0.0172 (+35%) | [+0.0130, +0.0214] |
 | Recall@50 | +0.0394 (+25%) | [+0.0341, +0.0445] |
+| Precision@10 | +0.0142 | [+0.0112, +0.0172] |
+| Hit rate@10 | +0.0392 | [+0.0262, +0.0524] |
 
 The candidate ceiling (Recall@500) is 0.5156.
 
@@ -64,13 +70,26 @@ python -m trustworthy_recsys.ranking.dataset --run-dir data/processed/movielens_
   --examples data/processed/movielens_phase1/ratio_80_10_10/validation_warm.jsonl \
   --output-dir artifacts/ranking/validation_warm_500        # repeat with test_warm.jsonl
 python -m trustworthy_recsys.ranking.train --table-dir artifacts/ranking/validation_warm_500 \
-  --output-dir artifacts/ranking/lambdarank_v1 --threads 8
+  --output-dir artifacts/ranking/lambdarank_v1 --retrieval-model-dir data/downloads/two_tower_80_v1/model --threads 8
 python -m trustworthy_recsys.ranking.evaluate --table-dir artifacts/ranking/test_warm_500 \
   --model-dir artifacts/ranking/lambdarank_v1 --output results/ranking/lambdarank_v1_test_warm.json
 ```
 
-Building a table takes about 34 ms per user. On macOS, LightGBM runs single-threaded in any process that has already imported PyTorch, because two OpenMP runtimes in one process can crash.
+Building a table takes about 34 ms per user. On macOS, LightGBM runs single-threaded in any process that has already imported PyTorch, because two OpenMP runtimes in one process can crash. The cap covers model loading too.
+
+## Serving
+
+Set `TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR` in learned mode, as described in the README. Startup verifies the reranker's artifact hashes, then its recorded retrieval inputs, model weights and embeddings, feature cutoff, and training Parquet. It fits the feature statistics in about 3 s.
+
+Measured in-process with exact search standing in for Weaviate (20 requests, p50):
+
+| | Retrieval | Reranking | Total |
+|---|---:|---:|---:|
+| Pass-through, 100 candidates | 3.3 ms | — | 3.4 ms |
+| LambdaRank, 500 candidates | 4.1 ms | 63.9 ms | 68.3 ms |
+
+Weaviate adds network time; the retrieval report measured 36 ms p95 at 100 candidates. Rank features use the position in the hard-filtered candidate list. Without genre filters, that is the training-time position.
 
 ## Limits
 
-These are offline explicit-rating results from one temporal split and one model fit. They are not online or causal evidence. Only warm users are evaluated, and new visitors use the popularity fallback. The reranker is not yet wired into the FastAPI application.
+These are offline explicit-rating results from one temporal split and one model fit. They are not online or causal evidence. Only warm users are evaluated, and new visitors use the popularity fallback. Latency was measured locally, not under concurrent load.

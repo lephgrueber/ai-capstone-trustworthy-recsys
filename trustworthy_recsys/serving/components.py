@@ -95,6 +95,7 @@ class LearnedRetrievalAdapter:
     recommender: Any
     info: ComponentInfo
     supported_ids: frozenset[str]
+    model_dir: Any = None
 
     @classmethod
     def load(cls, inputs_dir, model_dir) -> "LearnedRetrievalAdapter":
@@ -117,6 +118,7 @@ class LearnedRetrievalAdapter:
                 mode="learned",
             ),
             supported_ids=frozenset(recommender.inputs.item_ids),
+            model_dir=model_dir,
         )
 
     def retrieve(self, query: ModelQuery, limit: int) -> CandidateBatch:
@@ -228,3 +230,15 @@ def build_baseline_retrieval(
 
 def build_learned_retrieval(inputs_dir, model_dir) -> LearnedRetrievalAdapter:
     return LearnedRetrievalAdapter.load(inputs_dir, model_dir)
+
+
+def build_lambdarank_reranker(model_dir, run_dir, scenario, retrieval: LearnedRetrievalAdapter):
+    """Load the LambdaRank reranker paired with the active learned retrieval model."""
+    # Keep ranking dependencies optional for installations without the `rank` extra.
+    try:
+        from trustworthy_recsys.ranking.reranker import LambdaRankReranker
+    except ImportError as error:
+        raise ValueError(f"reranking requires the rank extra: {error}") from error
+    return LambdaRankReranker.load(
+        model_dir, run_dir, scenario, retrieval.recommender.inputs, retrieval.model_dir
+    )
