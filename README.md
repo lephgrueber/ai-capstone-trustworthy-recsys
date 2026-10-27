@@ -6,7 +6,7 @@ Developed for CIS 5980: AI Capstone at the University of Pennsylvania under the 
 
 ## Project and current status
 
-The repository now contains a two-tower retrieval implementation with Weaviate-backed nearest-neighbor search and a user-facing application. FastAPI supports credential-free fixtures, a local MovieLens genre baseline, or a verified published two-tower model. Each application path uses hard filtering, pass-through reranking, and final output validation. LambdaRank reranking is not yet integrated and remains part of the Milestone 3 team work. The broader evaluation plan includes direct method (DM), inverse propensity scoring (IPS), self-normalized IPS (SNIPS), and doubly robust (DR) estimation.
+The repository now contains a two-tower retrieval implementation with Weaviate-backed nearest-neighbor search and a user-facing application. FastAPI supports credential-free fixtures, a local MovieLens genre baseline, or a verified published two-tower model. Each application path uses hard filtering, reranking, and final output validation. Learned mode can optionally apply a LightGBM LambdaRank reranker over the top 500 two-tower candidates (see [docs/ranking_report.md](docs/ranking_report.md)); otherwise a pass-through reranker keeps retrieval order. The broader evaluation plan includes direct method (DM), inverse propensity scoring (IPS), self-normalized IPS (SNIPS), and doubly robust (DR) estimation.
 
 The repository currently includes:
 
@@ -22,7 +22,7 @@ The repository currently includes:
 - Retrieval quality, latency, integrity, robustness and error-analysis reports, plus a retrieval Model Card.
 - An M3 movie-discovery application with a FastAPI inference boundary, responsive React/TypeScript frontend, explicit drawer-based personalization, and optional TMDB display-artwork enrichment.
 
-Uniform-random, popularity, genre-aware, and two-tower retrieval are implemented. The two-tower training, publication, evaluation, standalone prediction, and FastAPI learned-serving paths are present. A portable trained bundle is tracked through Git LFS; extracted and locally published runtime artifacts remain ignored. Retrieval-specific slices are implemented in the retrieval evaluator; the general evaluation-slice file remains a placeholder. LambdaRank, natural-language preference interpretation, and policy-value estimators are not implemented; structured preference controls remain functional. MovieLens does not supply the logged propensities needed for the planned IPS/SNIPS/DR experiments; that work requires a separate suitable evaluation dataset.
+Uniform-random, popularity, genre-aware, and two-tower retrieval are implemented. The two-tower training, publication, evaluation, standalone prediction, and FastAPI learned-serving paths are present. A portable trained bundle is tracked through Git LFS; extracted and locally published runtime artifacts remain ignored. Retrieval-specific slices are implemented in the retrieval evaluator; the general evaluation-slice file remains a placeholder. Natural-language preference interpretation and policy-value estimators are not implemented; structured preference controls remain functional. MovieLens does not supply the logged propensities needed for the planned IPS/SNIPS/DR experiments; that work requires a separate suitable evaluation dataset.
 
 ## Project structure
 
@@ -177,6 +177,12 @@ For learned serving:
    export TRUSTWORTHY_RECSYS_RUN_DIR=data/processed/<matching-completed-run>
    export TRUSTWORTHY_RECSYS_RETRIEVAL_INPUTS_DIR=data/downloads/two_tower_80_v1/inputs
    export TRUSTWORTHY_RECSYS_RETRIEVAL_MODEL_DIR=artifacts/retrieval/team_80_weaviate
+   ```
+
+   Optionally enable LambdaRank reranking with a model trained by `trustworthy_recsys.ranking.train` (requires the `rank` extra; see [docs/ranking_report.md](docs/ranking_report.md)). The candidate budget then defaults to 500. Startup refuses a reranker trained with different retrieval inputs, model weights, or training data:
+
+   ```bash
+   export TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR=artifacts/ranking/lambdarank_v1
    ```
 
 4. Start FastAPI:

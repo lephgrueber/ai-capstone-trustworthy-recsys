@@ -29,7 +29,9 @@ pnpm-debug.log*
 # Generated smoke-test output
 results/smoke/*.json
 artifacts/retrieval/
+artifacts/ranking/
 results/retrieval/
+results/ranking/
 data/downloads/
 
 # Reproducible per-example prediction/evaluation outputs. Keep compact

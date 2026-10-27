@@ -49,3 +49,22 @@ def test_reranker_cannot_restore_filtered_or_new_item():
     request = RecommendationRequest.model_validate(payload(history_items=[], excluded_movie_ids=["115"]))
     with pytest.raises(ComponentOutputError, match="introduced"):
         service(reranker=IntroducesItem()).recommend(request)
+
+
+class RecordsLimit:
+    info = ComponentInfo(name="records-limit", version="1", mode="external")
+
+    def __init__(self):
+        self.limits = []
+
+    def retrieve(self, query, limit):
+        self.limits.append(limit)
+        return CandidateBatch(candidates=[ScoredMovie(movie_id="102", score=0.5)], component=self.info)
+
+
+def test_reranker_receives_full_configured_candidate_budget():
+    retrieval = RecordsLimit()
+    catalog = fixture_catalog()
+    request = RecommendationRequest.model_validate(payload())  # result_count=6
+    RecommendationService(catalog, retrieval, PassThroughReranker(), "fixture", candidate_budget=500).recommend(request)
+    assert retrieval.limits == [500]
