@@ -84,9 +84,11 @@ class FakeLearnedRecommender:
         self.requests = []
         self.closed = False
 
-    def recommend_indices(self, request, limit):
+    def recommend_scored(self, request, limit):
         self.requests.append(request)
-        return ([1, 2][:limit], not request.history_items)
+        if not request.history_items:
+            return [1, 2][:limit], None, True
+        return [1, 2][:limit], [0.75, 0.5][:limit], False
 
     def close(self):
         self.closed = True
@@ -99,6 +101,7 @@ def test_learned_adapter_maps_original_ids_and_reports_fallback():
 
     learned = adapter.retrieve(ModelQuery(history_items=["1"], known_user_id="known"), 2)
     assert [item.movie_id for item in learned.candidates] == ["2", "3"]
+    assert [item.score for item in learned.candidates] == [0.75, 0.5]
     assert learned.warnings == []
     assert recommender.requests[-1].user_id == "known"
 
@@ -106,5 +109,6 @@ def test_learned_adapter_maps_original_ids_and_reports_fallback():
     assert "Unsupported history items" in fallback.warnings[0]
     assert "Popularity fallback" in fallback.warnings[1]
     assert recommender.requests[-1].user_id == "__new_visitor__"
+    assert all(item.score is None for item in fallback.candidates)
     adapter.close()
     assert recommender.closed

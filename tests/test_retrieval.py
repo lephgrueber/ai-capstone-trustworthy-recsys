@@ -107,6 +107,19 @@ def test_exact_search_exclusions_and_tie_breaks():
     assert index.search_filtered([1.,0.],3,{0,1,2})==[]
 
 
+def test_recommend_scored_returns_cosine_scores_and_null_fallback():
+    vectors=np.array([[1.,0.],[.6,.8],[0.,1.]],dtype='float32')
+    inputs=SimpleNamespace(item_ids=['a','b','c'],positive_counts=np.array([1,3,2]),item_map={'a':0,'b':1,'c':2},user_map={})
+    rec=RetrievalRecommender(inputs,SimpleNamespace(eval=lambda:None),ExactIndex(vectors))
+    rec.query_vector=lambda history:None if not history else np.array([1.,0.],dtype='float32')
+    indices,scores,fallback=rec.recommend_scored(RecommendationRequest('new',['a']),2)
+    assert (indices,fallback)==([1,2],False)
+    assert scores==pytest.approx([.6,0.])
+    assert rec.recommend_scored(RecommendationRequest('new',[]),2)==([1,2],None,True)
+    # Order must agree with the score-free path used by evaluation.
+    assert rec.recommend_indices(RecommendationRequest('new',['a']),2)==(indices,False)
+
+
 def test_weaviate_adaptive_overfetch_and_mapping_checks():
     vectors=np.tile(np.array([[1.,0.]],dtype='float32'),(800,1))
     ids=[str(i) for i in range(800)]

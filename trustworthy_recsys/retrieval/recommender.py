@@ -13,13 +13,16 @@ from .weaviate_store import WeaviateIndex
 
 
 class RetrievalRecommender:
-    def __init__(self,inputs,model,index):
+    def __init__(self,inputs,model,index,item_vectors=None):
         self.inputs,self.model,self.index=inputs,model,index
+        # Saved, verified embeddings let callers recover scores; Weaviate search returns order only.
+        self.item_vectors=item_vectors if item_vectors is not None else getattr(index,'vectors',None)
         self.model.eval()
         self.popularity=np.lexsort((np.arange(len(inputs.item_ids)),-inputs.positive_counts))
 
-    @classmethod
-    def load(cls,inputs_dir,model_dir):
+    @staticmethod
+    def load_verified(inputs_dir,model_dir):
+        """Return verified inputs, model and saved item vectors; no index is opened."""
         inputs=ModelInputs(inputs_dir,verify=True)
         root=Path(model_dir)
         config=read_json(root/'training.json')
@@ -30,11 +33,15 @@ class RetrievalRecommender:
         for name,digest in read_json(root/'manifest.json')['outputs'].items():
             if hashes(root/name)['sha256']!=digest:
                 raise ValueError(f'Model artifact hash mismatch: {name}')
-        model=load_model(root/'model.pt',inputs.item_features)
-        index=WeaviateIndex.load(root/'weaviate.json',inputs.item_ids,np.load(root/'item_embeddings.npy'))
+        return inputs,load_model(root/'model.pt',inputs.item_features),np.load(root/'item_embeddings.npy')
+
+    @classmethod
+    def load(cls,inputs_dir,model_dir):
+        inputs,model,vectors=cls.load_verified(inputs_dir,model_dir)
+        index=WeaviateIndex.load(Path(model_dir)/'weaviate.json',inputs.item_ids,vectors)
         if index.ntotal!=len(inputs.item_ids):
             raise ValueError('Index/catalog size mismatch')
-        return cls(inputs,model,index)
+        return cls(inputs,model,index,vectors)
 
     def close(self):
         if hasattr(self.index, 'close'):
@@ -78,6 +85,19 @@ class RetrievalRecommender:
         if query is None:
             return self.popularity_indices(excluded,k),True
         return filtered_search(self.index,query,k,excluded),False
+
+    def recommend_scored(self,request,k):
+        """Like recommend_indices, plus cosine scores; scores are None on popularity fallback."""
+        if k<=0:
+            raise ValueError('k must be positive')
+        excluded=self.excluded(request)
+        query=self.query_vector(request.history_items)
+        if query is None:
+            return self.popularity_indices(excluded,k),None,True
+        if self.item_vectors is None:
+            raise ValueError('Scores require the saved item embeddings')
+        indices=filtered_search(self.index,query,k,excluded)
+        return indices,(self.item_vectors[indices]@query).astype(float).tolist(),False
 
     def popularity_indices(self,excluded,k):
         result=[]

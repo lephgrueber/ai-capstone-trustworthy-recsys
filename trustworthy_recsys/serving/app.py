@@ -18,6 +18,7 @@ from trustworthy_recsys.serving.components import (
     FixtureRetrieval,
     PassThroughReranker,
     build_baseline_retrieval,
+    build_lambdarank_reranker,
     build_learned_retrieval,
 )
 from trustworthy_recsys.serving.config import Settings
@@ -59,7 +60,10 @@ def _load_runtime(
 ) -> Runtime:
     runtime = Runtime(settings=settings, interpreter=interpreter or UnavailableInterpreter())
     retrieval = None
+    reranker = PassThroughReranker()
     try:
+        if settings.reranker_model_dir is not None and settings.backend_mode != "learned":
+            raise ValueError("TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR requires learned backend mode")
         if settings.backend_mode == "fixture":
             catalog = fixture_catalog()
             retrieval = FixtureRetrieval.build(catalog)
@@ -101,6 +105,10 @@ def _load_runtime(
                     }
                 )
                 links_path = settings.run_dir / "links.parquet"
+                if settings.reranker_model_dir is not None:
+                    reranker = build_lambdarank_reranker(
+                        settings.reranker_model_dir, settings.run_dir, settings.scenario, retrieval
+                    )
             except (KeyError, TypeError) as error:
                 raise ValueError(f"learned artifact compatibility metadata is invalid: {error}") from error
         else:
@@ -115,7 +123,7 @@ def _load_runtime(
         runtime.service = RecommendationService(
             catalog=catalog,
             retrieval=retrieval,
-            reranker=PassThroughReranker(),
+            reranker=reranker,
             backend_mode=settings.backend_mode,
             candidate_budget=settings.candidate_budget,
         )
@@ -247,7 +255,8 @@ def create_app(
             model_label = "Synthetic demo"
             data_source = "Synthetic fixture catalog"
         elif configured.backend_mode == "learned":
-            model_label = "Learned model"
+            reranking = runtime.service.reranker.info.name == "lambdarank"
+            model_label = "Learned retrieval + LambdaRank reranking" if reranking else "Learned retrieval"
             data_source = "Configured learned artifacts"
         else:
             model_label = "Model unavailable"

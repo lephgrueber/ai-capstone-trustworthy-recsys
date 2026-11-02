@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 import trustworthy_recsys.serving.app as app_module
@@ -12,7 +13,7 @@ from trustworthy_recsys.serving.app import create_app
 from trustworthy_recsys.serving.catalog import Catalog
 from trustworthy_recsys.serving.components import LearnedRetrievalAdapter
 from trustworthy_recsys.serving.config import Settings
-from trustworthy_recsys.serving.contracts import AppliedRefinement, CatalogMovie, ComponentInfo
+from trustworthy_recsys.serving.contracts import AppliedRefinement, CatalogMovie, ComponentInfo, RankingResult, ScoredMovie
 
 
 def payload(**preferences):
@@ -208,9 +209,11 @@ class FakeLearnedRecommender:
         )
         self.closed = False
 
-    def recommend_indices(self, request, limit):
-        ranked = [index for index in [1, 2, 0] if self.inputs.item_ids[index] not in request.history_items]
-        return ranked[:limit], not request.history_items
+    def recommend_scored(self, request, limit):
+        ranked = [index for index in [1, 2, 0] if self.inputs.item_ids[index] not in request.history_items][:limit]
+        if not request.history_items:
+            return ranked, None, True
+        return ranked, [0.9 - 0.1 * position for position in range(len(ranked))], False
 
     def close(self):
         self.closed = True
@@ -258,6 +261,7 @@ def test_learned_mode_loads_verified_adapter_and_serves_new_visitor(tmp_path, mo
     assert response.json()["backend_mode"] == "learned"
     assert response.json()["retrieval"]["mode"] == "learned"
     assert [item["movie"]["movie_id"] for item in response.json()["recommendations"]] == ["2", "3"]
+    assert [item["retrieval_score"] for item in response.json()["recommendations"]] == pytest.approx([0.9, 0.8])
     assert recommender.closed
 
 
@@ -299,3 +303,80 @@ def test_search_bounds_are_strict():
         response = client.get("/api/v1/catalog/search", params={"limit": 500})
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
+
+
+class FakeReranker:
+    info = ComponentInfo(name="lambdarank", version="test", mode="learned")
+
+    def rerank(self, query, candidates, limit):
+        # Reverse retrieval order so the test can see the reranker took effect.
+        items = [ScoredMovie(movie_id=c.movie_id, score=float(i)) for i, c in enumerate(candidates.candidates)][::-1]
+        return RankingResult(items=items[:limit], component=self.info)
+
+
+def learned_settings(tmp_path, **extra):
+    run_dir, inputs_dir, model_dir = tmp_path / "run", tmp_path / "inputs", tmp_path / "model"
+    for root in (run_dir, inputs_dir, model_dir):
+        root.mkdir()
+        (root / "manifest.json").write_text('{"outputs": {}}\n', encoding="utf-8")
+    pd.DataFrame(
+        {"movie_id": ["1", "2", "3"], "title": ["One", "Two", "Three"], "genres": [["Drama"], ["Comedy"], ["Action"]]}
+    ).to_parquet(run_dir / "movies.parquet", index=False)
+    (model_dir / "weaviate.json").write_text("{}\n", encoding="utf-8")
+    return Settings(backend_mode="learned", run_dir=run_dir, retrieval_inputs_dir=inputs_dir,
+                    retrieval_model_dir=model_dir, **extra)
+
+
+def test_learned_mode_serves_configured_lambdarank_reranker(tmp_path, monkeypatch):
+    settings = learned_settings(tmp_path, reranker_model_dir=tmp_path / "reranker", candidate_budget=500)
+    recommender = FakeLearnedRecommender(hashes(settings.run_dir / "movies.parquet")["sha256"])
+    adapter = LearnedRetrievalAdapter(
+        recommender, ComponentInfo(name="two-tower-weaviate", version="test", mode="learned"),
+        frozenset(recommender.inputs.item_ids),
+    )
+    calls = []
+    monkeypatch.setattr(app_module, "build_learned_retrieval", lambda *_: adapter)
+    monkeypatch.setattr(app_module, "build_lambdarank_reranker", lambda *args: calls.append(args) or FakeReranker())
+    with TestClient(create_app(settings)) as client:
+        status = client.get("/api/v1/application/status").json()
+        body = client.post("/api/v1/recommendations", json={**payload(history_items=["1"]), "result_count": 2}).json()
+    assert calls[0][0] == tmp_path / "reranker" and calls[0][3] is adapter
+    assert status["model_label"] == "Learned retrieval + LambdaRank reranking"
+    assert body["reranker"]["name"] == "lambdarank"
+    # Retrieval order was 2, 3; the fake reranker reverses it and reports its own scores.
+    assert [item["movie"]["movie_id"] for item in body["recommendations"]] == ["3", "2"]
+    assert [item["retrieval_score"] for item in body["recommendations"]] == pytest.approx([0.8, 0.9])
+    assert [item["ranking_score"] for item in body["recommendations"]] == [1.0, 0.0]
+
+
+def test_reranker_failure_makes_learned_mode_not_ready_and_closes_retrieval(tmp_path, monkeypatch):
+    settings = learned_settings(tmp_path, reranker_model_dir=tmp_path / "reranker")
+    recommender = FakeLearnedRecommender(hashes(settings.run_dir / "movies.parquet")["sha256"])
+    adapter = LearnedRetrievalAdapter(
+        recommender, ComponentInfo(name="two-tower-weaviate", version="test", mode="learned"),
+        frozenset(recommender.inputs.item_ids),
+    )
+    monkeypatch.setattr(app_module, "build_learned_retrieval", lambda *_: adapter)
+
+    def refuse(*_):
+        raise ValueError("reranker was trained with a different retrieval model")
+
+    monkeypatch.setattr(app_module, "build_lambdarank_reranker", refuse)
+    with TestClient(create_app(settings)) as client:
+        ready = client.get("/ready")
+    assert ready.status_code == 503 and "different retrieval model" in ready.json()["detail"]
+    assert recommender.closed
+
+
+def test_reranker_requires_learned_mode():
+    with TestClient(create_app(Settings(reranker_model_dir="anything"))) as client:
+        ready = client.get("/ready")
+    assert ready.status_code == 503 and "requires learned backend" in ready.json()["detail"]
+
+
+def test_reranker_env_defaults_candidate_budget_to_500(monkeypatch):
+    monkeypatch.setenv("TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR", "/tmp/reranker")
+    monkeypatch.delenv("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET", raising=False)
+    assert Settings.from_env().candidate_budget == 500
+    monkeypatch.delenv("TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR")
+    assert Settings.from_env().candidate_budget == 100

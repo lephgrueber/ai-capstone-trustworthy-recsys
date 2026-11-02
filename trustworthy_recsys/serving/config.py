@@ -14,6 +14,7 @@ class Settings:
     run_dir: Path | None = None
     retrieval_inputs_dir: Path | None = None
     retrieval_model_dir: Path | None = None
+    reranker_model_dir: Path | None = None
     scenario: str = "ratio_80_10_10"
     candidate_budget: int = 100
     tmdb_read_access_token: str | None = None
@@ -21,7 +22,7 @@ class Settings:
     poster_cache_size: int = 512
 
     def __post_init__(self) -> None:
-        for name in ("run_dir", "retrieval_inputs_dir", "retrieval_model_dir"):
+        for name in ("run_dir", "retrieval_inputs_dir", "retrieval_model_dir", "reranker_model_dir"):
             value = getattr(self, name)
             if value is not None and not isinstance(value, Path):
                 object.__setattr__(self, name, Path(value))
@@ -31,8 +32,11 @@ class Settings:
         run = os.getenv("TRUSTWORTHY_RECSYS_RUN_DIR")
         retrieval_inputs = os.getenv("TRUSTWORTHY_RECSYS_RETRIEVAL_INPUTS_DIR")
         retrieval_model = os.getenv("TRUSTWORTHY_RECSYS_RETRIEVAL_MODEL_DIR")
+        reranker_model = os.getenv("TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR")
+        # The reranker was trained on top-500 candidates; pass-through needs far fewer.
+        default_budget = "500" if reranker_model else "100"
         try:
-            budget = int(os.getenv("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET", "100"))
+            budget = int(os.getenv("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET", default_budget))
         except ValueError as error:
             raise ValueError("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET must be an integer") from error
         if not 10 <= budget <= 500:
@@ -42,6 +46,7 @@ class Settings:
             run_dir=Path(run) if run else None,
             retrieval_inputs_dir=Path(retrieval_inputs) if retrieval_inputs else None,
             retrieval_model_dir=Path(retrieval_model) if retrieval_model else None,
+            reranker_model_dir=Path(reranker_model) if reranker_model else None,
             scenario=os.getenv("TRUSTWORTHY_RECSYS_SCENARIO", "ratio_80_10_10"),
             candidate_budget=budget,
             tmdb_read_access_token=os.getenv("TMDB_READ_ACCESS_TOKEN") or None,
