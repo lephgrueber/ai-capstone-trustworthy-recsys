@@ -30,6 +30,7 @@ pnpm-debug.log*
 results/smoke/*.json
 artifacts/retrieval/
 results/retrieval/
+results/ope/
 data/downloads/
 
 # Reproducible per-example prediction/evaluation outputs. Keep compact

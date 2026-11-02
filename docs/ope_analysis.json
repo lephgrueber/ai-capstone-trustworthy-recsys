@@ -1,0 +1,286 @@
+{
+  "partitions": {
+    "test": {
+      "clicks": 161,
+      "clicks_on_preferred_action": 4,
+      "distinct_preferred_actions": 16,
+      "preferred_action_matches": 572,
+      "rows": 45801,
+      "top_preferred_actions": [
+        {
+          "action_id": 43,
+          "logged_matches": 198,
+          "matched_clicks": 1,
+          "preferred_contexts": 15892
+        },
+        {
+          "action_id": 35,
+          "logged_matches": 97,
+          "matched_clicks": 2,
+          "preferred_contexts": 8031
+        },
+        {
+          "action_id": 62,
+          "logged_matches": 62,
+          "matched_clicks": 0,
+          "preferred_contexts": 5516
+        },
+        {
+          "action_id": 7,
+          "logged_matches": 71,
+          "matched_clicks": 0,
+          "preferred_contexts": 5346
+        },
+        {
+          "action_id": 60,
+          "logged_matches": 56,
+          "matched_clicks": 1,
+          "preferred_contexts": 4263
+        },
+        {
+          "action_id": 41,
+          "logged_matches": 25,
+          "matched_clicks": 0,
+          "preferred_contexts": 2310
+        },
+        {
+          "action_id": 47,
+          "logged_matches": 31,
+          "matched_clicks": 0,
+          "preferred_contexts": 2165
+        },
+        {
+          "action_id": 24,
+          "logged_matches": 11,
+          "matched_clicks": 0,
+          "preferred_contexts": 691
+        },
+        {
+          "action_id": 26,
+          "logged_matches": 7,
+          "matched_clicks": 0,
+          "preferred_contexts": 466
+        },
+        {
+          "action_id": 38,
+          "logged_matches": 6,
+          "matched_clicks": 0,
+          "preferred_contexts": 455
+        }
+      ]
+    },
+    "train": {
+      "clicks": 1288,
+      "clicks_on_preferred_action": 121,
+      "distinct_preferred_actions": 17,
+      "preferred_action_matches": 4737,
+      "rows": 366404,
+      "top_preferred_actions": [
+        {
+          "action_id": 43,
+          "logged_matches": 1664,
+          "matched_clicks": 22,
+          "preferred_contexts": 130726
+        },
+        {
+          "action_id": 35,
+          "logged_matches": 891,
+          "matched_clicks": 20,
+          "preferred_contexts": 64918
+        },
+        {
+          "action_id": 62,
+          "logged_matches": 573,
+          "matched_clicks": 14,
+          "preferred_contexts": 44931
+        },
+        {
+          "action_id": 7,
+          "logged_matches": 543,
+          "matched_clicks": 14,
+          "preferred_contexts": 41478
+        },
+        {
+          "action_id": 60,
+          "logged_matches": 358,
+          "matched_clicks": 5,
+          "preferred_contexts": 32722
+        },
+        {
+          "action_id": 41,
+          "logged_matches": 257,
+          "matched_clicks": 11,
+          "preferred_contexts": 18369
+        },
+        {
+          "action_id": 47,
+          "logged_matches": 203,
+          "matched_clicks": 10,
+          "preferred_contexts": 16103
+        },
+        {
+          "action_id": 24,
+          "logged_matches": 78,
+          "matched_clicks": 10,
+          "preferred_contexts": 4605
+        },
+        {
+          "action_id": 26,
+          "logged_matches": 60,
+          "matched_clicks": 10,
+          "preferred_contexts": 3968
+        },
+        {
+          "action_id": 38,
+          "logged_matches": 38,
+          "matched_clicks": 2,
+          "preferred_contexts": 3626
+        }
+      ]
+    },
+    "validation": {
+      "clicks": 173,
+      "clicks_on_preferred_action": 2,
+      "distinct_preferred_actions": 16,
+      "preferred_action_matches": 585,
+      "rows": 45800,
+      "top_preferred_actions": [
+        {
+          "action_id": 43,
+          "logged_matches": 215,
+          "matched_clicks": 1,
+          "preferred_contexts": 15332
+        },
+        {
+          "action_id": 35,
+          "logged_matches": 103,
+          "matched_clicks": 0,
+          "preferred_contexts": 8230
+        },
+        {
+          "action_id": 62,
+          "logged_matches": 87,
+          "matched_clicks": 0,
+          "preferred_contexts": 5914
+        },
+        {
+          "action_id": 7,
+          "logged_matches": 53,
+          "matched_clicks": 0,
+          "preferred_contexts": 5454
+        },
+        {
+          "action_id": 60,
+          "logged_matches": 45,
+          "matched_clicks": 1,
+          "preferred_contexts": 4115
+        },
+        {
+          "action_id": 41,
+          "logged_matches": 31,
+          "matched_clicks": 0,
+          "preferred_contexts": 2293
+        },
+        {
+          "action_id": 47,
+          "logged_matches": 19,
+          "matched_clicks": 0,
+          "preferred_contexts": 2215
+        },
+        {
+          "action_id": 24,
+          "logged_matches": 7,
+          "matched_clicks": 0,
+          "preferred_contexts": 670
+        },
+        {
+          "action_id": 38,
+          "logged_matches": 6,
+          "matched_clicks": 0,
+          "preferred_contexts": 449
+        },
+        {
+          "action_id": 26,
+          "logged_matches": 9,
+          "matched_clicks": 0,
+          "preferred_contexts": 437
+        }
+      ]
+    }
+  },
+  "scope": "Post-hoc descriptive analysis only; no fitting or policy reselection",
+  "selection": {
+    "candidates": [
+      {
+        "dm": 0.011252660526150923,
+        "dr": 0.0032273650602058766,
+        "epsilon": 0.1,
+        "ips": 0.003521834061135371,
+        "snips": 0.0034539614561027846
+      },
+      {
+        "dm": 0.009532108489960082,
+        "dr": 0.0033504378540373065,
+        "epsilon": 0.3,
+        "ips": 0.003578602620087336,
+        "snips": 0.0035247311827956997
+      },
+      {
+        "dm": 0.007811556453769242,
+        "dr": 0.003473510647868738,
+        "epsilon": 0.5,
+        "ips": 0.0036353711790393013,
+        "snips": 0.003596112311015119
+      },
+      {
+        "dm": 0.003510176363292137,
+        "dr": 0.0037811926324473138,
+        "epsilon": 1.0,
+        "ips": 0.003777292576419214,
+        "snips": 0.003777292576419214
+      }
+    ],
+    "policy": "epsilon-greedy over training-only predicted click rates; action ties use ascending action ID",
+    "reward_model_shrinkage": 100.0,
+    "reward_model_train_rows": 366404,
+    "selected_epsilon": 1.0,
+    "selection_metric": "validation IPS",
+    "test_used_for_selection": false,
+    "tie_break": "greater epsilon",
+    "validation_rows": 45800
+  },
+  "test_weight_concentration": {
+    "contextual_epsilon_0.1": {
+      "high_weight_clicks": 4,
+      "high_weight_exposures": 572,
+      "high_weight_share_of_ips_click_total": 0.9483722459717199,
+      "ips_without_largest_single_click_reward": 0.005065391585336564,
+      "largest_single_click_share": 0.23709306149292997,
+      "sensitivity_definition": "Change one largest-contribution click to zero; same exposures, weights and denominator. Not a corrected estimate."
+    },
+    "contextual_epsilon_0.3": {
+      "high_weight_clicks": 4,
+      "high_weight_exposures": 572,
+      "high_weight_share_of_ips_click_total": 0.8270290121189865,
+      "ips_without_largest_single_click_reward": 0.004716054234623697,
+      "largest_single_click_share": 0.20675725302974662,
+      "sensitivity_definition": "Change one largest-contribution click to zero; same exposures, weights and denominator. Not a corrected estimate."
+    },
+    "contextual_epsilon_0.5": {
+      "high_weight_clicks": 4,
+      "high_weight_exposures": 572,
+      "high_weight_share_of_ips_click_total": 0.6735966735966735,
+      "ips_without_largest_single_click_reward": 0.004366716883910831,
+      "largest_single_click_share": 0.16839916839916838,
+      "sensitivity_definition": "Change one largest-contribution click to zero; same exposures, weights and denominator. Not a corrected estimate."
+    },
+    "uniform": {
+      "high_weight_clicks": 0,
+      "high_weight_exposures": 0,
+      "high_weight_share_of_ips_click_total": 0.0,
+      "ips_without_largest_single_click_reward": 0.003493373507128665,
+      "largest_single_click_share": 0.006211180124223602,
+      "sensitivity_definition": "Change one largest-contribution click to zero; same exposures, weights and denominator. Not a corrected estimate."
+    }
+  }
+}

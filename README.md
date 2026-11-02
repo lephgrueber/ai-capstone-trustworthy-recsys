@@ -6,7 +6,7 @@ Developed for CIS 5980: AI Capstone at the University of Pennsylvania under the 
 
 ## Project and current status
 
-The repository now contains a two-tower retrieval implementation with Weaviate-backed nearest-neighbor search and a user-facing application. FastAPI supports credential-free fixtures, a local MovieLens genre baseline, or a verified published two-tower model. Each application path uses hard filtering, pass-through reranking, and final output validation. LambdaRank reranking is not yet integrated and remains part of the Milestone 3 team work. The broader evaluation plan includes direct method (DM), inverse propensity scoring (IPS), self-normalized IPS (SNIPS), and doubly robust (DR) estimation.
+The repository now contains a two-tower retrieval implementation with Weaviate-backed nearest-neighbor search and a user-facing application. FastAPI supports credential-free fixtures, a local MovieLens genre baseline, or a verified published two-tower model. Each application path uses hard filtering, pass-through reranking, and final output validation. LambdaRank reranking is not yet integrated and remains part of the Milestone 3 team work. A separate Open Bandit experiment implements direct method (DM), inverse propensity scoring (IPS), self-normalized IPS (SNIPS), and doubly robust (DR) estimation of position-specific click reward.
 
 The repository currently includes:
 
@@ -20,9 +20,34 @@ The repository currently includes:
 - A curated 50-case qualitative golden set and automated tests.
 - A training-only model-input pipeline, CPU two-tower training/inference implementation, and Weaviate embedding storage/search.
 - Retrieval quality, latency, integrity, robustness and error-analysis reports, plus a retrieval Model Card.
+- An Open Bandit preparation and OPE pipeline with temporal splits, a training-only contextual click baseline, validation policy selection, time-block bootstrap intervals, weight diagnostics, and Data/Model Cards.
 - An M3 movie-discovery application with a FastAPI inference boundary, responsive React/TypeScript frontend, explicit drawer-based personalization, and optional TMDB display-artwork enrichment.
 
-Uniform-random, popularity, genre-aware, and two-tower retrieval are implemented. The two-tower training, publication, evaluation, standalone prediction, and FastAPI learned-serving paths are present. A portable trained bundle is tracked through Git LFS; extracted and locally published runtime artifacts remain ignored. Retrieval-specific slices are implemented in the retrieval evaluator; the general evaluation-slice file remains a placeholder. LambdaRank, natural-language preference interpretation, and policy-value estimators are not implemented; structured preference controls remain functional. MovieLens does not supply the logged propensities needed for the planned IPS/SNIPS/DR experiments; that work requires a separate suitable evaluation dataset.
+Uniform-random, popularity, genre-aware, and two-tower retrieval are implemented. The two-tower training, publication, evaluation, standalone prediction, and FastAPI learned-serving paths are present. A portable trained bundle is tracked through Git LFS; extracted and locally published runtime artifacts remain ignored. Retrieval-specific slices are implemented in the retrieval evaluator; the general evaluation-slice file remains a placeholder. LambdaRank and natural-language preference interpretation are not implemented; structured preference controls remain functional. MovieLens does not supply logged propensities. OPE therefore runs on the separate Open Bandit fashion dataset and does not establish policy value for the MovieLens model.
+
+## Open Bandit OPE
+
+The initial run uses the random policy, `all` campaign and display position 1:
+458,005 exposures, 80 actions, and chronological 80/10/10 partitions. The test
+partition contains 45,801 exposures and 161 clicks. Validation selected the
+uniform policy from the predefined epsilon-greedy candidates; personalized
+improvement has not been established. Contextual estimates have low effective
+sample sizes and wide uncertainty intervals.
+
+```powershell
+python -m trustworthy_recsys.ope.prepare --raw-dir data/downloads/open_bandit_dataset --output-dir data/processed/open_bandit_my_run
+python -m trustworthy_recsys.ope.evaluate --inputs-dir data/processed/open_bandit_my_run --output-dir results/ope/my_run
+python -m pytest tests/test_ope.py -q
+```
+
+Use new output directories for each run. See [OPE instructions and methodology](docs/ope.md),
+[measured OPE report](docs/ope_report.md), [OPE Data Card](docs/data_card_ope.md),
+and [OPE Model Card](docs/model_card_ope.md). Raw datasets and generated per-event
+outputs stay local and Git-ignored; manifests identify their exact versions.
+The [follow-up analysis](docs/ope_analysis.md) explains the limited evidence behind
+personalized estimates. The [movie feedback plan](docs/movie_feedback_plan.md)
+specifies how the app could collect its own evaluation data; that logging and
+randomized featured-slot experiment are not yet implemented.
 
 ## Project structure
 
@@ -70,6 +95,12 @@ ai-capstone-trustworthy-recsys/
 │   ├── serving/                          # FastAPI contracts, service, artwork, and API tests
 │   └── test_smoke.py
 ├── trustworthy_recsys/
+│   ├── ope/
+│   │   ├── prepare.py                   # Open Bandit validation and temporal partitions
+│   │   ├── policy.py                    # Training-only categorical reward model and policies
+│   │   ├── estimators.py                # DM, IPS, SNIPS, DR and block-bootstrap diagnostics
+│   │   ├── evaluate.py                  # Validation selection, held-out OPE and reports
+│   │   └── common.py                    # Immutable runs and artifact verification
 │   ├── baselines/
 │   │   ├── genre.py                     # Genre-weighted popularity recommender
 │   │   ├── popularity.py                # Popularity and top-rated recommenders
