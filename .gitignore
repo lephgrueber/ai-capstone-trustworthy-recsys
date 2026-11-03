@@ -29,7 +29,8 @@ pnpm-debug.log*
 # Generated smoke-test output
 results/smoke/*.json
 artifacts/retrieval/
-artifacts/ranking/
+artifacts/ranking/*
+!artifacts/ranking/lambdarank_v1/
 results/retrieval/
 results/ope/
 results/ranking/
