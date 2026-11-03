@@ -4,6 +4,12 @@ A recommendation-system capstone exploring retrieval, ranking, and trustworthy o
 
 Developed for CIS 5980: AI Capstone at the University of Pennsylvania under the AI Engineering track.
 
+**New here?** Start with the [demo application](#m3-application-quick-start).
+It uses synthetic movies and needs no dataset, API token, or running Weaviate service.
+For the trained movie model, follow [learned serving](#learned-movie-serving) after
+the demo works. The [onboarding audit](docs/readme_audit.md) records what we actually
+tested and which setup gaps remain.
+
 ## Project and current status
 
 The repository now contains a two-tower retrieval implementation with Weaviate-backed nearest-neighbor search and a user-facing application. FastAPI supports credential-free fixtures, a local MovieLens genre baseline, or a verified published two-tower model. Each application path uses hard filtering, reranking, and final output validation. Learned mode can optionally apply a LightGBM LambdaRank reranker over the top 500 two-tower candidates (see [docs/ranking_report.md](docs/ranking_report.md)); otherwise a pass-through reranker keeps retrieval order. A separate Open Bandit experiment implements direct method (DM), inverse propensity scoring (IPS), self-normalized IPS (SNIPS), and doubly robust (DR) estimation of position-specific click reward.
@@ -150,7 +156,45 @@ The source CSVs, dataset documentation, and generated run are local artifacts; a
 
 ## M3 application quick start
 
-The default fixture backend needs no MovieLens download, model artifact, credential, or external API.
+### Prerequisites and tested scope
+
+- Git and access to this repository.
+- Python 3.11 or later, as required by `pyproject.toml`. The isolated Windows audit
+  used Python 3.14.6; CI is configured for Python 3.12.
+- Node **22.12 or later within version 22**, or **version 24**, with npm. These
+  versions satisfy the checked-in frontend dependencies' engine declarations.
+  Node 23 produced unsupported-engine warnings in the audit; do not use that
+  successful build as proof of supported test behavior.
+- Internet access for the first dependency installation.
+
+Docker and Git LFS are needed for the trained-model workflow, not for fixture
+serving. Installing the commands below includes retrieval libraries for later use;
+it does not download the MovieLens dataset or start a vector database.
+
+Clone the repository and enter its root directory:
+
+```text
+git clone https://github.com/lephgrueber/ai-capstone-trustworthy-recsys.git
+cd ai-capstone-trustworthy-recsys
+```
+
+If access is restricted, authenticate with a GitHub account that has repository
+access. Git LFS may download the tracked model bundle during cloning; see the
+[team setup guide](docs/team_model_setup.md) for model download requirements.
+
+### Install dependencies
+
+**Windows PowerShell:**
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,retrieval,serve,app-dev]"
+cd frontend
+npm ci
+cd ..
+```
+
+**macOS/Linux (Bash):**
 
 ```bash
 python -m venv .venv
@@ -160,18 +204,60 @@ npm ci
 cd ..
 ```
 
-Run the API and frontend in separate terminals from the repository root:
+### Start the demo
+
+Run the API in one terminal from the repository root. These commands explicitly
+select the synthetic fixture backend. Use a fresh terminal so settings from a
+previous learned-model session do not carry over; do not load `.env` for this demo.
+
+**Windows PowerShell:**
+
+```powershell
+$env:TRUSTWORTHY_RECSYS_BACKEND = "fixture"
+.\.venv\Scripts\python.exe -m uvicorn trustworthy_recsys.serving.app:app --reload --host 127.0.0.1 --port 8000
+```
+
+**macOS/Linux (Bash):**
 
 ```bash
+export TRUSTWORTHY_RECSYS_BACKEND=fixture
 .venv/bin/python -m uvicorn trustworthy_recsys.serving.app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-```bash
+In a second terminal, also starting from the repository root (either shell):
+
+```text
 cd frontend
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. `GET http://127.0.0.1:8000/health` should report a running process and `/ready` should report `{"status":"ok","backend_mode":"fixture","detail":null}`. The UI labels synthetic fixture content and the pass-through “no learned reranking” component.
+Open `http://127.0.0.1:5173`. The UI labels synthetic fixture content and the
+pass-through reranker. Missing movie posters are expected in fixture mode.
+Stop either development server with Ctrl+C in its terminal.
+
+### Verify the backend you intended to start
+
+In PowerShell:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/ready
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/application/status
+```
+
+In Bash:
+
+```bash
+curl -fsS http://127.0.0.1:8000/ready
+curl -fsS http://127.0.0.1:8000/api/v1/application/status
+```
+
+Fixture readiness should report `{"status":"ok","backend_mode":"fixture","detail":null}`.
+The application status should identify the synthetic demo. `/health` only confirms
+that the process is running: in our live check it returned HTTP 200 even when an
+unconfigured learned backend returned HTTP 503 from `/ready` and recommendations.
+Always check readiness **and** backend mode, not just the terminal's startup message.
+
+### Optional movie artwork and environment settings
 
 Artwork enrichment is optional and display-only for MovieLens-backed baseline and learned modes when the matching run contains `links.parquet`. The backend maps original MovieLens IDs to exact TMDB movie records and returns validated poster and backdrop `image.tmdb.org` URLs. It never title-matches movies or uses TMDB genres, and it cannot affect recommendation IDs, order, scores, filtering, or model readiness. Export a TMDB API Read Access Token in the API process when you want live artwork:
 
@@ -179,9 +265,37 @@ Artwork enrichment is optional and display-only for MovieLens-backed baseline an
 export TMDB_READ_ACCESS_TOKEN="<your-api-read-access-token>"
 ```
 
+In PowerShell, use `$env:TMDB_READ_ACCESS_TOKEN = "<your-api-read-access-token>"`
+in the terminal that starts the backend. A token alone does not enable posters in
+fixture mode; use a MovieLens-backed mode with matching `links.parquet`.
+
 The service reads process environment variables and intentionally does **not** auto-load `.env`; `.env.example` is documentation only. Never put this token in a `VITE_*` variable. Without a token, recommendations, search, readiness, and neutral artwork fallbacks continue to work. See TMDB's [authentication](https://developer.themoviedb.org/docs/authentication-application), [image URL](https://developer.themoviedb.org/docs/image-basics), and [attribution](https://developer.themoviedb.org/docs/faq) guidance.
 
+If you keep your backend settings in a root `.env`, explicitly load it when starting
+the configured movie backend. For example, on Windows:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn trustworthy_recsys.serving.app:app --env-file .env --reload --host 127.0.0.1 --port 8000
+```
+
+On macOS/Linux, substitute `.venv/bin/python`. Existing process environment values
+take precedence over values loaded from `.env`; use a fresh terminal when switching
+configurations. Restart after changing settings and verify the application status.
+
+### MovieLens genre baseline
+
 To use the existing genre baseline, configure a completed local run that contains the agreed training split. It must have `manifest.json`, no `INCOMPLETE` marker, and `ratio_80_10_10/{train.parquet,train_item_ids.json}`:
+
+**Windows PowerShell** (replace the example path with your completed run):
+
+```powershell
+$env:TRUSTWORTHY_RECSYS_BACKEND = "baseline"
+$env:TRUSTWORTHY_RECSYS_RUN_DIR = "data/processed/your_completed_run"
+$env:TRUSTWORTHY_RECSYS_SCENARIO = "ratio_80_10_10"
+.\.venv\Scripts\python.exe -m uvicorn trustworthy_recsys.serving.app:app --host 127.0.0.1 --port 8000
+```
+
+**macOS/Linux (Bash):**
 
 ```bash
 TRUSTWORTHY_RECSYS_BACKEND=baseline \
@@ -191,6 +305,15 @@ TRUSTWORTHY_RECSYS_SCENARIO=ratio_80_10_10 \
 ```
 
 Only the training parquet is passed to the repository's existing genre fitter. Validation/test data and held-out labels are not request inputs. Selecting `learned` without compatible configured artifacts returns not-ready and never silently switches to the genre baseline.
+
+### Learned movie serving
+
+The model bundle avoids retraining, but the movie **application** also needs a
+matching completed data run for catalog metadata. That run is not supplied by
+the demo and is not replaced by the bundle's prepared training arrays. Follow
+[the data pipeline instructions](docs/data_pipeline.md) to acquire and prepare it.
+The full learned application setup was not repeated in the isolated onboarding
+audit; the verified demo should not be described as proof of this entire workflow.
 
 For learned serving:
 
@@ -202,6 +325,17 @@ For learned serving:
    ```
 
 3. In the API terminal, set the learned backend paths to the prepared inputs, published model, and matching completed data run:
+
+   **Windows PowerShell:**
+
+   ```powershell
+   $env:TRUSTWORTHY_RECSYS_BACKEND = "learned"
+   $env:TRUSTWORTHY_RECSYS_RUN_DIR = "data/processed/your_matching_completed_run"
+   $env:TRUSTWORTHY_RECSYS_RETRIEVAL_INPUTS_DIR = "data/downloads/two_tower_80_v1/inputs"
+   $env:TRUSTWORTHY_RECSYS_RETRIEVAL_MODEL_DIR = "artifacts/retrieval/team_80_weaviate"
+   ```
+
+   **macOS/Linux (Bash):**
 
    ```bash
    export TRUSTWORTHY_RECSYS_BACKEND=learned
@@ -216,7 +350,15 @@ For learned serving:
    export TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR=artifacts/ranking/lambdarank_v1
    ```
 
+   In PowerShell, use `$env:TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR = "artifacts/ranking/lambdarank_v1"`.
+
 4. Start FastAPI:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m uvicorn trustworthy_recsys.serving.app:app --host 127.0.0.1 --port 8000
+   ```
+
+   Or on macOS/Linux:
 
    ```bash
    .venv/bin/python -m uvicorn trustworthy_recsys.serving.app:app --host 127.0.0.1 --port 8000
@@ -227,6 +369,8 @@ For learned serving:
    ```bash
    curl -fsS http://127.0.0.1:8000/ready
    ```
+
+   In PowerShell, use `Invoke-RestMethod http://127.0.0.1:8000/ready`.
 
    A ready response reports `"status":"ok"` and `"backend_mode":"learned"`. A mismatch returns 503; learned mode never silently changes to the genre baseline.
 
@@ -254,25 +398,90 @@ The manifest records 25,602,867 training, 3,198,273 validation, and 3,199,064 te
 
 ### Application schemas and checks
 
-```bash
-.venv/bin/python -m trustworthy_recsys.serving.export_openapi --output frontend/openapi.json
-cd frontend && npm run client:generate && cd ..
-.venv/bin/python -m pytest -q tests/serving
-cd frontend && npm test && npm run typecheck && npm run build && npm run test:e2e
+Run these checks after installing the application dependencies above.
+
+**Windows PowerShell, from the repository root:**
+
+```powershell
+.\.venv\Scripts\python.exe -m trustworthy_recsys.serving.export_openapi --output frontend/openapi.json
+.\.venv\Scripts\python.exe -m pytest -q tests/serving tests/test_ope.py
+cd frontend
+npm run client:generate
+npm test
+npm run typecheck
+npm run build
+cd ..
 ```
 
-Playwright may require the one-time `npx playwright install chromium`. The end-to-end test starts FastAPI against the completed local `m3_ratio_80_10_10_20261002` baseline run plus Vite; use backend/API tests for the credential-free fixture path when the local run is absent. Browser artwork tests use local mocked poster/backdrop responses, not live TMDB. See the [application System Card](docs/system_card.md).
+**macOS/Linux (Bash), from the repository root:**
 
-## Quick start
+```bash
+.venv/bin/python -m trustworthy_recsys.serving.export_openapi --output frontend/openapi.json
+.venv/bin/python -m pytest -q tests/serving tests/test_ope.py
+cd frontend
+npm run client:generate
+npm test
+npm run typecheck
+npm run build
+cd ..
+```
 
-Requires Python 3.11 or later. From the repository root, create an environment and install the project and test dependencies.
+**Browser tests are not yet a fresh-checkout smoke test.** `frontend/playwright.config.ts`
+hardcodes the baseline run at `data/processed/m3_ratio_80_10_10_20261002` and uses
+Bash-style environment assignments and `.venv/bin/python`. That dataset is ignored
+by Git. Before running `npm run test:e2e` from `frontend`, generate the expected
+baseline run and adapt the launcher for your shell, or run the configured services
+yourself. Its `reuseExistingServer` option can mask missing setup by reusing a server
+already on ports 8000/5173. The fixture API checks above do not require this dataset.
+
+Playwright may also need `npx playwright install chromium` from `frontend`.
+Browser artwork tests use mocked responses, not live TMDb. See the
+[application System Card](docs/system_card.md).
+
+### Troubleshooting and observability
+
+| Symptom | What to check |
+|---|---|
+| PowerShell cannot find `.venv/bin/python` | Use `.\.venv\Scripts\python.exe` from the repository root. |
+| API starts but recommendations fail | Check `/ready` and `/api/v1/application/status`; `/health` alone is insufficient. |
+| You expected the trained model but see synthetic movies | Check the backend mode, process environment, and whether you explicitly loaded `.env`. |
+| Posters are absent | Fixture mode has no MovieLens-to-TMDb mapping. In movie modes, check the token, matching `links.parquet`, and `posters_configured`. |
+| A successful request returns no movies | Hard filters may exclude all retrieved candidates. Inspect `partial` and `warnings`; relax preferences in the UI if appropriate. |
+| `npm ci` reports unsupported engines | Use a Node version satisfying the prerequisites above; installation alone is not a compatibility check. |
+| Custom timing/request logs are missing | Default Uvicorn startup showed access logs but not the application logger's INFO messages in our audit. Explicit application logging configuration is still needed. |
+
+The current `candidates_displayed` log field counts movies returned by the API,
+not browser-confirmed views. Display and click collection remains planned in
+[the movie feedback design](docs/movie_feedback_plan.md). Do not interpret HTTP
+success counts as impressions, user satisfaction, or evidence of movie-policy value.
+
+### Verification evidence
+
+On November 2, 2026, an isolated committed-source copy and new Python environment
+on Windows successfully installed dependencies, built the frontend, passed **48
+serving/OPE tests**, and served real HTTP requests in fixture mode. The literal
+Unix interpreter path failed in PowerShell before correction. The Node version
+used in that audit produced engine warnings. Initial installer/build permission
+failures were resolved by allowing access outside the execution sandbox.
+
+This was not a fresh physical machine, a completed browser walkthrough, or a
+fresh learned-model deployment. The Bash instructions and dependency-compatible
+Node versions above were not separately exercised in that Windows audit. See
+[the audit record](docs/readme_audit.md) for exact scope, results and remaining work.
+
+## Python data tools only
+
+For preprocessing and OPE without the application, install the base package and
+test dependencies below. This smaller installation does not include the serving,
+retrieval or ranking extras. Use the application quick start for the UI/backend.
+If `.venv` already exists, reuse it and skip its creation.
 
 **Windows PowerShell:**
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q tests/test_data_pipeline.py tests/test_ope.py
 ```
 
 **macOS/Linux:**
@@ -280,7 +489,7 @@ python -m venv .venv
 ```bash
 python -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q tests/test_data_pipeline.py tests/test_ope.py
 ```
 
 The project installs NumPy, pandas, and PyArrow. To work interactively with the EDA, also install `matplotlib` and `ipykernel` in the environment used by your notebook editor. Select that environment as the kernel and open [notebooks/eda.ipynb](notebooks/eda.ipynb).
