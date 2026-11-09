@@ -1,0 +1,82 @@
+{
+  "protocol": {
+    "index": {
+      "client_version": "4.23.1",
+      "collection": "MovieLensTwoTower80V1",
+      "dimensions": 32,
+      "fingerprint": "ab4837d3048b812cb76e043911007c4aa71ee588a15275347f31bb7b9e516512",
+      "index": {
+        "ef": 128,
+        "ef_construction": 100,
+        "filtering": "adaptive overfetch, client-side seen exclusion",
+        "kind": "Weaviate HNSW",
+        "max_connections": 32,
+        "metric": "cosine",
+        "quantization": "none",
+        "vectorizer": "self_provided"
+      },
+      "items": 50986,
+      "schema_version": "1.0",
+      "server_version": "1.39.8"
+    },
+    "model_manifest_sha256": "4b8feeebb71a04dc14aa7cdc1b4d49612bc75d096fd677d7cd9141aa9fc4bf49",
+    "numpy": "2.3.4",
+    "platform": "Windows-11-10.0.26300-SP0",
+    "processor": "Intel64 Family 6 Model 140 Stepping 1, GenuineIntel",
+    "repetitions": 3,
+    "seed": 42,
+    "targets": "New engineering acceptance targets: mean exact overlap >= .99 and local ANN p95 <= 100 ms at each k. These are not historical SLOs or concurrent-load guarantees.",
+    "timing": "search and seen filtering including RPC; precomputed query; alternating order; sequential local requests",
+    "torch": "2.10.0+cpu",
+    "torch_threads": 2,
+    "users_requested": 200,
+    "users_with_history": 199,
+    "validation_sha256": "218b195f411d2b1f53989c11a59768718e7ca2d236852144b93889bb6a653742",
+    "warmups_per_index": 10
+  },
+  "reload": {
+    "bundle_load_seconds": 9.950697700027376,
+    "embeddings_equal": true,
+    "identical_prediction_probes": 12,
+    "mappings_equal": true,
+    "model_vectors_match": true,
+    "original_load_seconds": 14.145293400040828,
+    "remote_mappings_and_vectors_verified": true
+  },
+  "results": {
+    "100": {
+      "agreement_target_passed": true,
+      "ann_faster_at_median": false,
+      "ann_ms": {
+        "p50": 16.889800026547164,
+        "p95": 31.780920014716674,
+        "p99": 68.76619200454948
+      },
+      "exact_ms": {
+        "p50": 7.448500022292137,
+        "p95": 10.261240007821469,
+        "p99": 11.841336046345516
+      },
+      "latency_target_passed": true,
+      "mean_exact_overlap": 0.998994974874372,
+      "queries": 597
+    },
+    "500": {
+      "agreement_target_passed": true,
+      "ann_faster_at_median": false,
+      "ann_ms": {
+        "p50": 47.11779998615384,
+        "p95": 90.09413996245705,
+        "p99": 154.45501602487633
+      },
+      "exact_ms": {
+        "p50": 7.526399975176901,
+        "p95": 10.409959987737238,
+        "p99": 12.25009998772292
+      },
+      "latency_target_passed": true,
+      "mean_exact_overlap": 0.9996180904522614,
+      "queries": 597
+    }
+  }
+}

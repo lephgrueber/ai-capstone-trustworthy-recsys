@@ -45,6 +45,30 @@ async function genre(user: ReturnType<typeof userEvent.setup>, kind: "Include" |
 }
 
 describe("movie-first discovery", () => {
+  it("searches from the main page, keeps the microphone there, and refreshes recommendations", async () => {
+    const base = mockApi({ status: { ...STATUS, refinement_available: true } });
+    const fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("refine")) {
+        const body = JSON.parse(String(init?.body));
+        return json({ outcome: "applied", preference_revision: body.preference_revision + 1,
+          preferences: { ...EMPTY, include_genres: ["Comedy"] }, summary: "Including Comedy." });
+      }
+      return base(url, init);
+    });
+    vi.stubGlobal("fetch", fetch);
+    const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("heading", { name: "Explore movies" });
+    const search = screen.getByRole("search", { name: "Search movie recommendations" });
+    expect(within(search).getByRole("button", { name: "Use microphone" })).toBeInTheDocument();
+    await user.type(within(search).getByRole("textbox"), "show comedy");
+    await user.click(within(search).getByRole("button", { name: "Search movies" }));
+    await screen.findByText("Including Comedy.");
+    await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(2));
+    const panel = await drawer(user);
+    expect(within(panel).queryByRole("button", { name: "Use microphone" })).not.toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Include: Comedy" })).toBeInTheDocument();
+  });
+
   it("loads empty-history recommendations once and focuses drawer search", async () => {
     const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
     expect(screen.getByRole("status", { name: "Loading movies" })).toBeInTheDocument();

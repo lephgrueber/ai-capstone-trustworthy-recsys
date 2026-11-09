@@ -6,8 +6,10 @@ import json
 import logging
 import time
 import uuid
+import sqlite3
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -35,8 +37,11 @@ from trustworthy_recsys.serving.contracts import (
     PosterRequest,
     PosterResponse,
     StatusResponse,
+    FeedbackEvent,
+    FeedbackAck,
 )
-from trustworthy_recsys.serving.refinement import RefinementInterpreter, UnavailableInterpreter
+from trustworthy_recsys.serving.feedback import FeedbackStore, FeedbackError
+from trustworthy_recsys.serving.refinement import RefinementInterpreter, UnavailableInterpreter, CatalogInterpreter
 from trustworthy_recsys.serving.posters import PosterService, build_poster_service
 from trustworthy_recsys.serving.service import ComponentOutputError, RecommendationService, ServiceInputError
 
@@ -114,6 +119,8 @@ def _load_runtime(
         else:
             raise ValueError("TRUSTWORTHY_RECSYS_BACKEND must be fixture, baseline, or learned")
         runtime.catalog = catalog
+        if interpreter is None:
+            runtime.interpreter = CatalogInterpreter(catalog)
         runtime.posters = poster_service or build_poster_service(
             links_path,
             settings.tmdb_read_access_token,
@@ -126,8 +133,19 @@ def _load_runtime(
             reranker=reranker,
             backend_mode=settings.backend_mode,
             candidate_budget=settings.candidate_budget,
+            feedback_store=FeedbackStore(settings.feedback_db, settings.feedback_mode,
+                settings.feedback_epsilon, settings.feedback_traffic == 'synthetic',
+                provenance={
+                    'presentation': 'fixed_grid_separate_feature_v1',
+                    'policy_code_sha256': hashes(Path(__file__).with_name('feedback.py'))['sha256'],
+                    'retrieval': retrieval.info.model_dump(), 'reranker': reranker.info.model_dump(),
+                    'artifacts': {name: hashes(root/'manifest.json')['sha256'] for name, root in
+                        [('source', settings.run_dir), ('model', settings.retrieval_model_dir),
+                         ('inputs', settings.retrieval_inputs_dir), ('reranker', settings.reranker_model_dir)]
+                        if root is not None and (root/'manifest.json').exists()},
+                }) if settings.feedback_mode != 'off' else None,
         )
-    except (ValueError, OSError) as error:
+    except (ValueError, OSError, sqlite3.Error) as error:
         if retrieval is not None:
             close = getattr(retrieval, "close", None)
             if close is not None:
@@ -218,6 +236,15 @@ def create_app(
         logger.error("component_output_error id=%s detail=%s", request_id(request), exc)
         return error_response(request, 502, "invalid_component_output", "A recommendation component returned invalid output.")
 
+    @app.exception_handler(FeedbackError)
+    async def feedback_error(request: Request, exc: FeedbackError):
+        return error_response(request, 422, 'invalid_feedback', str(exc))
+
+    @app.exception_handler(sqlite3.Error)
+    async def storage_error(request: Request, exc: sqlite3.Error):
+        logger.error('feedback_storage_failure id=%s', request_id(request))
+        return error_response(request, 503, 'feedback_storage_failure', 'Feedback storage is unavailable; no unlogged experimental result was returned.')
+
     @app.get("/health", response_model=StatusResponse)
     def health():
         return StatusResponse(status="ok", backend_mode=configured.backend_mode)
@@ -268,6 +295,7 @@ def create_app(
             refinement_available=runtime.interpreter.name != "unavailable",
             posters_configured=bool(runtime.posters and runtime.posters.configured),
             available_genres=sorted(runtime.catalog.genres) if runtime.catalog else [],
+            feedback_mode=configured.feedback_mode,
         )
 
     @app.post("/api/v1/catalog/posters", response_model=PosterResponse)
@@ -308,6 +336,13 @@ def create_app(
         runtime: Runtime = request.app.state.runtime
         # Prompts are intentionally not logged.
         return runtime.interpreter.interpret(payload)
+
+    @app.post('/api/v1/feedback/events', response_model=FeedbackAck)
+    def feedback_events(payload: FeedbackEvent, request: Request):
+        runtime: Runtime = request.app.state.runtime
+        if runtime.service is None or runtime.service.feedback_store is None:
+            return error_response(request, 503, 'feedback_disabled', 'Feedback collection is not enabled.')
+        return FeedbackAck(duplicate=runtime.service.feedback_store.event(payload))
 
     return app
 

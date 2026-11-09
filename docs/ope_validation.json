@@ -1,0 +1,29 @@
+{
+  "action_mapping_verified": true,
+  "checks": {
+    "test": {
+      "clicks": 161,
+      "passed": true,
+      "rows": 45801
+    },
+    "train": {
+      "clicks": 1288,
+      "passed": true,
+      "rows": 366404
+    },
+    "validation": {
+      "clicks": 173,
+      "passed": true,
+      "rows": 45800
+    }
+  },
+  "clicks": 1622,
+  "comparison_manifest_sha256": "d2927457da01271e009ebcb0d39bd07d35eecd67ea086ebcddbca8cf956efe91",
+  "event_ids_disjoint": true,
+  "hashes_verified": true,
+  "input_manifest_sha256": "d289a4644723a66bf0cbc6049149f9756e82f7fae0f8aed4d70d2ba94e28b612",
+  "logical_reproduction_verified": true,
+  "rows": 458005,
+  "schema_verified": true,
+  "temporal_separation": true
+}

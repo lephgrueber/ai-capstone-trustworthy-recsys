@@ -12,6 +12,7 @@ from trustworthy_recsys.ope.estimators import contributions, point_estimates, su
 from trustworthy_recsys.ope.evaluate import evaluate
 from trustworthy_recsys.ope.policy import fit_reward_model, predict_rewards
 from trustworthy_recsys.ope.prepare import prepare, split_temporally
+from trustworthy_recsys.ope.validate import validate
 
 
 def test_known_policy_value_and_dr_correction():
@@ -100,6 +101,26 @@ def test_preparation_rejects_mismatched_random_support(tmp_path):
     with pytest.raises(ValueError, match='catalog size'):
         prepare(raw, tmp_path / 'out')
     assert (tmp_path / 'out' / 'INCOMPLETE').exists()
+
+
+def test_semantic_validation_reproduction_and_rehashed_corruption(tmp_path):
+    from trustworthy_recsys.data.reporting import hashes
+    raw = tmp_path/'raw'
+    make_source(raw)
+    first, second = tmp_path/'first', tmp_path/'second'
+    prepare(raw, first, chunk_size=83)
+    prepare(raw, second, chunk_size=101)
+    result = validate(second, tmp_path/'audit', compare_dir=first)
+    assert result['logical_reproduction_verified']
+    # A hash-consistent but semantically invalid artifact must still fail.
+    frame = pd.read_parquet(second/'test.parquet')
+    frame.loc[0, 'action_index'] = 1-int(frame.loc[0, 'action_index'])
+    frame.to_parquet(second/'test.parquet', index=False)
+    manifest = json.loads((second/'manifest.json').read_text())
+    manifest['outputs']['test.parquet'] = hashes(second/'test.parquet')['sha256']
+    (second/'manifest.json').write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match='Action IDs misaligned'):
+        validate(second, tmp_path/'invalid')
 
 
 def test_model_reload_unknown_context_and_training_isolation(tmp_path):

@@ -33,4 +33,5 @@ app-dev = [
 ]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = ["integration: requires a running local Weaviate instance"]

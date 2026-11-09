@@ -1,13 +1,13 @@
 # Data Card: model-ready retrieval inputs
 
 ## Dataset overview
-Derived from C:\Users\tolul\Documents\ai-capstone-trustworthy-recsys\data\processed\movielens_phase1 / ratio_80_10_10: 25,602,867 training ratings,
+Derived from `data/processed/movielens_phase1` / ratio_80_10_10: 25,602,867 training ratings,
 12,760,312 positive ratings, 170,509 users and 50,986 candidate movies.
 The preparer produced **676,684 context/target examples**, with at most 4 targets per user.
 
 ## Provenance and collection
 These are transformations of the completed MovieLens pipeline run, not newly collected observations.
-See the [source Data Card](../data/processed/movielens_phase1/DATA_CARD.md) for collection and release details. metadata.json records verified input hashes.
+See the [source Data Card](data_card_movielens.md) for collection and release details. metadata.json records verified input hashes.
 The original split and its reports remain unchanged.
 
 ## Licensing and usage
@@ -36,3 +36,12 @@ Evaluation continues to use the source validation/test JSONL and training-only h
 The retrieval publication stage stores only training-catalog movie IDs, their row indices, an embedding fingerprint, and model-produced vectors in Weaviate. User histories and validation/test labels remain local. Changing the storage/search backend does not change these model-ready inputs or the temporal split. The published model's `weaviate.json` describes the collection and index settings; loading verifies every remote movie ID and vector against the saved embedding matrix.
 Source hashes, timestamp boundaries, uniqueness, target exclusion, and row counts were checked during preparation.
 metadata.json contains statistics and schema.json describes the artifact contract. manifest.json fingerprints each output.
+
+## November 9, 2026 verification
+
+The full evaluation re-audited all 676,684 training pairs, held-out source hashes, and every prediction. A separately extracted Git LFS bundle reproduced item/user mappings, embedding rows and 12 prediction probes against the verified remote collection. No split, feature, embedding dimension or shared prediction schema changed. [Repeated ANN measurements](ann_benchmark.md) cover top-100 and top-500. Natural-language requests resolve genres and exact catalog titles into the existing preference schema; no new text embedding model was trained.
+
+
+## New movie-application feedback
+
+The source ratings and temporal split are unchanged. A separate [Movie Feedback Data Card](data_card_movie_feedback.md) describes application-owned exposure/response logs collected prospectively by the optional featured-slot experiment. Those logs contain known assignment probabilities; the original MovieLens ratings still do not. The movie-specific exporter and OPE evaluator are implemented, but synthetic checks are not evidence of real-user policy value. See [run instructions](movie_ope.md).

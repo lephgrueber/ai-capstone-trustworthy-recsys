@@ -39,8 +39,8 @@ events. Their higher test point estimates do not override validation selection.
 No personalized-policy improvement has been established.
 
 For a plain-language examination of why, see [the follow-up analysis](ope_analysis.md).
-The [movie feedback plan](movie_feedback_plan.md) maps the next collection step to
-the actual backend and frontend. It is a design, not a deployed logging feature.
+The [movie feedback plan](movie_feedback_plan.md) records the design implemented in [movie_ope.md](movie_ope.md), including
+the actual backend and frontend. The collection code is implemented; enabling the local movie pilot is a separate configuration step.
 
 To reproduce the descriptive analysis of the frozen run:
 
@@ -158,3 +158,19 @@ The source README states CC BY 4.0. Preserve attribution and modifications and
 cite Saito, Aihara, Matsutani and Narita, *Open Bandit Dataset and Pipeline*,
 [arXiv:2008.07146](https://arxiv.org/abs/2008.07146). Dataset access and field
 descriptions are on [ZOZO Research](https://research.zozo.com/data.html).
+
+## Independent data validation and repeatability
+
+Run the independent audit after preparation:
+
+```powershell
+python -m trustworthy_recsys.ope.validate --inputs-dir data/processed/open_bandit_my_run --output-dir results/ope/my_data_validation
+```
+
+To compare a second preparation, add `--compare-dir data/processed/open_bandit_previous_run`. The validator compares every logical record, statistics, schema and action mapping, while allowing run provenance and Parquet encoding to differ. It rejects temporal overlap, duplicate event IDs, inconsistent counts, invalid actions/rewards/propensities, schema mismatches and corrupted files.
+
+On November 9, preparation with 50,000-row chunks reproduced the earlier 100,000-row-chunk run exactly. See [the validation snapshot](ope_validation.json) and [updated Data Card](data_card_ope.md). Policy evaluation was not retuned using test outcomes.
+
+## Separate movie implementation
+
+Movie-application OPE is now implemented in `ope/movie.py`, backed by `serving/feedback.py` and browser instrumentation. It has its own input schema and uses saved per-decision candidate sets, not Open Bandit action IDs. See [movie setup and methodology](movie_ope.md). Open Bandit preparation and the existing frozen OPE results remain unchanged.

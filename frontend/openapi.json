@@ -279,6 +279,44 @@
           }
         }
       }
+    },
+    "/api/v1/feedback/events": {
+      "post": {
+        "summary": "Feedback Events",
+        "operationId": "feedback_events_api_v1_feedback_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackAck"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -317,6 +355,16 @@
             },
             "type": "array",
             "title": "Available Genres"
+          },
+          "feedback_mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "observe",
+              "randomized"
+            ],
+            "title": "Feedback Mode",
+            "default": "off"
           }
         },
         "additionalProperties": false,
@@ -349,6 +397,13 @@
           "summary": {
             "type": "string",
             "title": "Summary"
+          },
+          "resolved_movies": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogMovie"
+            },
+            "type": "array",
+            "title": "Resolved Movies"
           }
         },
         "additionalProperties": false,
@@ -525,6 +580,161 @@
           "error"
         ],
         "title": "ErrorResponse"
+      },
+      "FeedbackAck": {
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "title": "Accepted",
+            "default": true
+          },
+          "duplicate": {
+            "type": "boolean",
+            "title": "Duplicate"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "duplicate"
+        ],
+        "title": "FeedbackAck"
+      },
+      "FeedbackAssignment": {
+        "properties": {
+          "decision_id": {
+            "type": "string",
+            "title": "Decision Id"
+          },
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "assigned_at": {
+            "type": "string",
+            "title": "Assigned At"
+          },
+          "movie_id": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "pattern": "^[^\\s]+$",
+            "title": "Movie Id"
+          },
+          "policy": {
+            "type": "string",
+            "title": "Policy"
+          },
+          "propensity": {
+            "type": "number",
+            "maximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Propensity"
+          },
+          "eligible_count": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Eligible Count"
+          },
+          "age_ms": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Age Ms",
+            "default": 0
+          },
+          "outcome_window_seconds": {
+            "type": "integer",
+            "title": "Outcome Window Seconds",
+            "default": 1800
+          },
+          "synthetic": {
+            "type": "boolean",
+            "title": "Synthetic"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decision_id",
+          "token",
+          "assigned_at",
+          "movie_id",
+          "policy",
+          "propensity",
+          "eligible_count",
+          "synthetic"
+        ],
+        "title": "FeedbackAssignment"
+      },
+      "FeedbackEvent": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 16,
+            "pattern": "^[a-zA-Z0-9-]+$",
+            "title": "Event Id"
+          },
+          "decision_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Decision Id"
+          },
+          "token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Token"
+          },
+          "movie_id": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "pattern": "^[^\\s]+$",
+            "title": "Movie Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "display",
+              "details_open",
+              "favorite_add",
+              "hide",
+              "heartbeat",
+              "window_end"
+            ],
+            "title": "Kind"
+          },
+          "elapsed_ms": {
+            "type": "integer",
+            "maximum": 1805000.0,
+            "minimum": 0.0,
+            "title": "Elapsed Ms"
+          },
+          "surface": {
+            "type": "string",
+            "const": "featured",
+            "title": "Surface",
+            "default": "featured"
+          },
+          "stream_ok": {
+            "type": "boolean",
+            "title": "Stream Ok",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_id",
+          "decision_id",
+          "token",
+          "movie_id",
+          "kind",
+          "elapsed_ms"
+        ],
+        "title": "FeedbackEvent"
       },
       "HTTPValidationError": {
         "properties": {
@@ -785,6 +995,20 @@
               }
             ],
             "title": "Known User Id"
+          },
+          "assignment_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 16,
+                "pattern": "^[a-zA-Z0-9-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignment Key"
           }
         },
         "additionalProperties": false,
@@ -839,6 +1063,16 @@
           },
           "timings": {
             "$ref": "#/components/schemas/Timings"
+          },
+          "feedback": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedbackAssignment"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,

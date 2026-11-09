@@ -29,7 +29,19 @@ The repository currently includes:
 - An Open Bandit preparation and OPE pipeline with temporal splits, a training-only contextual click baseline, validation policy selection, time-block bootstrap intervals, weight diagnostics, and Data/Model Cards.
 - An M3 movie-discovery application with a FastAPI inference boundary, responsive React/TypeScript frontend, explicit drawer-based personalization, and optional TMDB display-artwork enrichment.
 
-Uniform-random, popularity, genre-aware, and two-tower retrieval are implemented. The two-tower training, publication, evaluation, standalone prediction, and FastAPI learned-serving paths are present. A portable trained bundle is tracked through Git LFS; extracted and locally published runtime artifacts remain ignored. Retrieval-specific slices are implemented in the retrieval evaluator; the general evaluation-slice file remains a placeholder. Optional LambdaRank reranking is implemented. Natural-language preference interpretation is not implemented; structured preference controls remain functional. MovieLens does not supply logged propensities. OPE therefore runs on the separate Open Bandit fashion dataset and does not establish policy value for the MovieLens model.
+Uniform-random, popularity, genre-aware, and two-tower retrieval are implemented. The two-tower training, publication, evaluation, standalone prediction, and FastAPI learned-serving paths are present. A portable trained bundle is tracked through Git LFS; extracted and locally published runtime artifacts remain ignored. Retrieval-specific slices are implemented in the retrieval evaluator; the general evaluation-slice file remains a placeholder. Optional LambdaRank reranking is implemented. Bounded English genre/title search is implemented, with a main-page search bar and optional browser voice input. Structured preference controls remain functional; arbitrary plot, actor and mood search is not supported. MovieLens does not supply logged propensities. OPE therefore runs on the separate Open Bandit fashion dataset and does not establish policy value for the MovieLens model.
+
+## Latest validation and search
+
+See the [completion record and validation evidence](docs/validation_20261109.md) for the six work items, failures resolved, and remaining limitations.
+
+The November 9 validation reproduced all 458,005 selected Open Bandit records and split assignments. The retrieval evaluation scored all 22,015 eligible test users, audited all 676,684 training pairs, and passed eight behavioral robustness probes. A separately extracted trained bundle reproduced mappings, embeddings and 12 prediction probes against the live Weaviate collection.
+
+Repeated ANN/exact comparisons at top-100 and top-500 achieved 99.90% and 99.96% exact-result overlap. ANN was slower than exact search on this machine; see [measured timings, targets and failures](docs/ann_benchmark.md). Local latency is not a production concurrency guarantee.
+
+- [MovieLens Data Card](docs/data_card_movielens.md), [model-ready inputs](docs/data_card_retrieval.md), and [Open Bandit Data Card](docs/data_card_ope.md).
+- [Retrieval report](docs/retrieval_report.md) and [retrieval Model Card](docs/model_card_retrieval.md).
+- [Main-page text and voice search](docs/natural_language_search.md): try `show comedy without thriller`, then press Enter or click the search icon. The microphone fills editable text; it does not submit automatically. Use localhost/HTTPS and a supported browser. No speech or LLM API key is needed by this application.
 
 ## Open Bandit OPE
 
@@ -42,6 +54,7 @@ sample sizes and wide uncertainty intervals.
 
 ```powershell
 python -m trustworthy_recsys.ope.prepare --raw-dir data/downloads/open_bandit_dataset --output-dir data/processed/open_bandit_my_run
+python -m trustworthy_recsys.ope.validate --inputs-dir data/processed/open_bandit_my_run --output-dir results/ope/my_validation
 python -m trustworthy_recsys.ope.evaluate --inputs-dir data/processed/open_bandit_my_run --output-dir results/ope/my_run
 python -m pytest tests/test_ope.py -q
 ```
@@ -52,8 +65,31 @@ and [OPE Model Card](docs/model_card_ope.md). Raw datasets and generated per-eve
 outputs stay local and Git-ignored; manifests identify their exact versions.
 The [follow-up analysis](docs/ope_analysis.md) explains the limited evidence behind
 personalized estimates. The [movie feedback plan](docs/movie_feedback_plan.md)
-specifies how the app could collect its own evaluation data; that logging and
-randomized featured-slot experiment are not yet implemented.
+records the design rationale. Movie-specific collection, a randomized featured-slot experiment, and an exporter/evaluator are now implemented; see [movie application OPE](docs/movie_ope.md). Real user collection is still required before claiming movie-policy improvement.
+
+## OPE on our movie application
+
+The application now supports durable movie feedback and a bounded featured-slot experiment. In `randomized` mode, the server logs the exact candidate pool, fixed grid and action probability before returning a result. The browser reports featured visibility, details opens, favorites/hides and delivery health, with deduplicated retries. Existing MovieLens ratings are not converted into invented propensity logs.
+
+Collection is **off by default**. After configuring learned serving, enable a local pilot in the backend terminal:
+
+```powershell
+$env:TRUSTWORTHY_RECSYS_FEEDBACK_MODE = "randomized"
+$env:TRUSTWORTHY_RECSYS_FEEDBACK_DB = "data/feedback/movie.sqlite3"
+$env:TRUSTWORTHY_RECSYS_FEEDBACK_TRAFFIC = "pilot"
+python -m uvicorn trustworthy_recsys.serving.app:app --host 127.0.0.1 --port 8000
+```
+
+The app displays a feedback collection notice. Once observations have matured (30-minute outcome window plus 24-hour late-arrival allowance), export and evaluate:
+
+```powershell
+python -m trustworthy_recsys.ope.movie prepare --db-path data/feedback/movie.sqlite3 --backend learned --output-dir data/processed/movie_feedback_run1
+python -m trustworthy_recsys.ope.movie evaluate --inputs-dir data/processed/movie_feedback_run1 --output-dir results/movie_ope/run1
+```
+
+Earlier partitions also purge assignments whose outcome/late-arrival windows reach the next partition. Short collections can remain insufficient after individual outcomes mature. Unknown outcomes remain unknown. Reports include missing-outcome bounds, supported-policy DM/IPS/SNIPS/DR estimates or scenarios, session-bootstrap uncertainty and weight diagnostics. They evaluate featured-slot choices inside saved candidate pools, not a different retriever or the whole slate.
+
+See [setup and methodology](docs/movie_ope.md), [Movie Feedback Data Card](docs/data_card_movie_feedback.md), and [technical validation](docs/movie_ope_validation.md). The 100-assignment pilot validates plumbing with synthetic outcomes; **no real movie-policy improvement is claimed yet**. No two-tower retraining is required to collect this data.
 
 ## Project structure
 
@@ -80,6 +116,10 @@ ai-capstone-trustworthy-recsys/
 ├── docs/
 │   ├── data_pipeline.md                 # Detailed pipeline and evaluation instructions
 │   ├── retrieval.md                     # Model inputs, training, index and evaluation commands
+│   ├── ann_benchmark.md                 # Repeated ANN/exact timings and reload evidence
+│   ├── natural_language_search.md       # Main-page text/voice search and browser checks
+│   ├── data_card_movielens.md            # Active MovieLens dataset card
+│   ├── data_card_ope.md                  # Open Bandit provenance, splits and audit
 │   ├── retrieval_report.md              # Measured retrieval report snapshot
 │   ├── model_card_retrieval.md           # Retrieval Model Card snapshot
 │   ├── data_card_retrieval.md            # Model-ready Data Card snapshot
@@ -102,7 +142,10 @@ ai-capstone-trustworthy-recsys/
 │   └── test_smoke.py
 ├── trustworthy_recsys/
 │   ├── ope/
+│   │   ├── movie.py                     # Movie feedback export and supported-policy OPE
+│   │   ├── movie_pilot.py               # Labeled synthetic feedback pilot
 │   │   ├── prepare.py                   # Open Bandit validation and temporal partitions
+│   │   ├── validate.py                  # Independent semantic and repeatability audit
 │   │   ├── policy.py                    # Training-only categorical reward model and policies
 │   │   ├── estimators.py                # DM, IPS, SNIPS, DR and block-bootstrap diagnostics
 │   │   ├── evaluate.py                  # Validation selection, held-out OPE and reports
@@ -127,6 +170,7 @@ ai-capstone-trustworthy-recsys/
 │   │   ├── tags.csv
 │   │   └── links.csv
 │   ├── retrieval/
+│   │   ├── benchmark.py                 # Repeated ANN/exact and portable reload checks
 │   │   ├── model.py                     # User and item towers
 │   │   ├── train.py                     # Training and validation checkpoint selection
 │   │   ├── index.py                     # Exact cosine reference for training/evaluation
@@ -451,8 +495,7 @@ Browser artwork tests use mocked responses, not live TMDb. See the
 | Custom timing/request logs are missing | Default Uvicorn startup showed access logs but not the application logger's INFO messages in our audit. Explicit application logging configuration is still needed. |
 
 The current `candidates_displayed` log field counts movies returned by the API,
-not browser-confirmed views. Display and click collection remains planned in
-[the movie feedback design](docs/movie_feedback_plan.md). Do not interpret HTTP
+not browser-confirmed views. The optional [movie feedback collector](docs/movie_ope.md) now stores separate browser visibility and featured response events; those events are not inferred from service logs. Do not interpret HTTP
 success counts as impressions, user satisfaction, or evidence of movie-policy value.
 
 ### Verification evidence

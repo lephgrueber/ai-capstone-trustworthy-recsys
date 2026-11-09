@@ -35,6 +35,8 @@ results/retrieval/
 results/ope/
 results/ranking/
 data/downloads/
+data/feedback/
+results/movie_ope/
 
 # Reproducible per-example prediction/evaluation outputs. Keep compact
 # summaries and RUN_NOTES.md visible for review.

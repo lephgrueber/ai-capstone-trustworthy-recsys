@@ -1,7 +1,7 @@
 # System Card: Trustworthy Recommendation System
 
 **Status:** M3 local prototype with learned retrieval integrated  
-**Last updated:** October 25, 2026
+**Last updated:** November 9, 2026
 
 ## Overview and intended use
 
@@ -23,15 +23,17 @@ React/Vite → FastAPI → two-tower/Weaviate retrieval
 
 The browser sends the submitted preference state with each recommendation request. Liked movies guide retrieval, while genre selections and hidden titles constrain the results. An empty history uses training-popularity fallback in learned mode.
 
-When `TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR` is set, a LightGBM LambdaRank model reorders the top 500 two-tower candidates using training-period features: popularity, rating, release year, user activity, and user × movie crosses such as co-likes with the submitted favorites. Offline, it raised test NDCG@10 from 0.1057 to 0.1204 and Recall@10 from 0.0486 to 0.0657 (docs/ranking_report.md). It can only reorder candidates that already passed hard filtering. Without it, a pass-through reranker preserves retrieval order. Preference refinement uses structured controls.
+When `TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR` is set, a LightGBM LambdaRank model reorders the top 500 two-tower candidates using training-period features: popularity, rating, release year, user activity, and user × movie crosses such as co-likes with the submitted favorites. Offline, it raised test NDCG@10 from 0.1057 to 0.1204 and Recall@10 from 0.0486 to 0.0657 (docs/ranking_report.md). It can only reorder candidates that already passed hard filtering. Without it, a pass-through reranker preserves retrieval order. Preference refinement supports structured controls and bounded English genre/exact-title requests from the main-page search bar. Optional browser speech fills editable text before submission; see [text and voice search](natural_language_search.md).
 
 MovieLens supplies movie IDs, titles, and genres. The frontend requests optional TMDb posters and backdrops separately, allowing recommendations to appear before the images finish loading.
 
 ## Privacy and retention
 
-Only a random session identifier is stored in `sessionStorage`. Preferences, results, and undo history remain in React memory and are lost on page reload. There is no persistent visitor-preference database.
+A random session identifier is stored in `sessionStorage`. With feedback enabled, a tab-scoped outbox also stores decision capability tokens and pending events for retries. UI preferences, results and undo history remain in React memory; the feedback server separately persists the submitted pre-decision preferences and a session HMAC in local SQLite. This is a research event store, not a user-account database.
 
 Logs may contain request IDs, status, component versions, counts, timings, and errors. Raw histories and prompt bodies are not intentionally logged. Production log-retention and access policies have not been established.
+
+Browser speech recognition may send audio to its provider; the application receives the submitted transcript, not recorded audio. Microphone activation requires an explicit click.
 
 The TMDb token stays on the backend. Artwork metadata requests send mapped movie IDs, not visitor histories or session identifiers. The browser downloads images directly from TMDb’s image service, which receives its network address and ordinary request metadata.
 
@@ -68,3 +70,9 @@ The prototype runs locally without production authentication, rate limiting, or 
 - **Candidate coverage:** Filters can leave too few matching movies in the retrieved pool. The application reports partial results rather than relaxing the visitor’s constraints.
 
 - **Data limitations:** MovieLens coverage and historical popularity can affect recommendations. These limitations are documented in the retrieval evaluation. The available data do not support conclusions about demographic fairness.
+
+## Movie feedback experiment
+
+The optional off/observe/randomized collector is implemented. Randomized mode draws one featured movie from a logged pool while keeping the ordinary grid fixed and excluding duplicates. It persists decisions before responding, binds events to a server-generated decision/token and deduplicates retries. The page displays a collection notice; About explains stored preferences and interaction events. Raw stores and exports are ignored by Git and must not be published as ordinary source artifacts.
+
+Movie-specific OPE uses mature 30-minute details-open outcomes with a 24-hour late-arrival allowance. Missing streams are unknown, not negative. Bounds and session-cluster uncertainty accompany estimates. This is local pilot infrastructure, not production authentication or multi-instance storage. Synthetic validation has passed; no real-user policy improvement is claimed. See [the implemented contract](movie_ope.md).

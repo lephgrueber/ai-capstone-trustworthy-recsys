@@ -138,6 +138,7 @@ class ApplicationStatus(StrictModel):
     poster_provider: Literal["tmdb"] = "tmdb"
     posters_configured: bool
     available_genres: list[str]
+    feedback_mode: Literal['off', 'observe', 'randomized'] = 'off'
 
 
 class RecommendationRequest(StrictModel):
@@ -146,6 +147,7 @@ class RecommendationRequest(StrictModel):
     preferences: PreferenceState
     result_count: int = Field(default=12, ge=1, le=50)
     known_user_id: str | None = Field(default=None, min_length=1, max_length=64)
+    assignment_key: str | None = Field(default=None, min_length=16, max_length=64, pattern=r'^[a-zA-Z0-9-]+$')
 
 
 class Timings(StrictModel):
@@ -162,6 +164,35 @@ class RecommendationItem(StrictModel):
     ranking_score: float | None = None
 
 
+class FeedbackAssignment(StrictModel):
+    decision_id: str
+    token: str
+    assigned_at: str
+    movie_id: MovieId
+    policy: str
+    propensity: float = Field(gt=0, le=1)
+    eligible_count: int = Field(ge=1)
+    age_ms: int = Field(default=0, ge=0)
+    outcome_window_seconds: int = 1800
+    synthetic: bool
+
+
+class FeedbackEvent(StrictModel):
+    event_id: str = Field(min_length=16, max_length=64, pattern=r'^[a-zA-Z0-9-]+$')
+    decision_id: str = Field(min_length=16, max_length=64)
+    token: str = Field(min_length=32, max_length=128)
+    movie_id: MovieId
+    kind: Literal['display', 'details_open', 'favorite_add', 'hide', 'heartbeat', 'window_end']
+    elapsed_ms: int = Field(ge=0, le=1805000)
+    surface: Literal['featured'] = 'featured'
+    stream_ok: bool = True
+
+
+class FeedbackAck(StrictModel):
+    accepted: bool = True
+    duplicate: bool
+
+
 class RecommendationResponse(StrictModel):
     request_id: str
     preference_revision: int
@@ -173,6 +204,7 @@ class RecommendationResponse(StrictModel):
     partial: bool
     warnings: list[str]
     timings: Timings
+    feedback: FeedbackAssignment | None = None
 
 
 class RefinementRequest(StrictModel):
@@ -187,6 +219,7 @@ class AppliedRefinement(StrictModel):
     preference_revision: int
     preferences: PreferenceState
     summary: str
+    resolved_movies: list[CatalogMovie] = Field(default_factory=list)
 
 
 class ClarificationRefinement(StrictModel):

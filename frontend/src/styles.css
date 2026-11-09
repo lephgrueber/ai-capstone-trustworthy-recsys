@@ -284,3 +284,25 @@ footer{border-top:1px solid #1e293b;padding:1.5rem;text-align:center;font-size:.
   .drawer-favorite button{min-width:2.75rem}
   .drawer-chips button{padding-inline:.7rem}
 }
+
+/* Main-page search stays accessible above the movie results. */
+.main-search { padding: 24px clamp(16px, 4vw, 64px) 18px; }
+.main-search form { max-width: 760px; margin: 0 auto; }
+.main-search-bar { display: flex; align-items: center; gap: 10px; min-height: 58px; padding: 6px 8px 6px 20px; border: 1px solid #627083; border-radius: 32px; background: #18212f; box-shadow: 0 3px 14px #0002; }
+.main-search-bar:focus-within { outline: 2px solid #c8d6ea; outline-offset: 3px; }
+.main-search-bar input { flex: 1; min-width: 0; background: transparent; color: #f4f6fa; border: 0; outline: 0; font-size: 16px; padding: 8px 0; }
+.main-search-bar input::placeholder { color: #b3bdcc; }
+.search-leading-icon { width: 20px; color: #bac6d8; flex-shrink: 0; }
+.search-submit, .voice-button { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; border: 0; cursor: pointer; flex-shrink: 0; }
+.search-submit { background: #dbe8fa; color: #18212f; }
+.voice-button { color: #dbe8fa; background: transparent; }
+.voice-button:hover { background: #ffffff12; }
+.voice-button.listening { color: #ffb4b4; background: #882f3d55; }
+.search-submit svg, .voice-button svg { width: 20px; height: 20px; }
+.search-submit:disabled, .voice-button:disabled { opacity: .45; cursor: not-allowed; }
+.main-search-help, .main-search-message { margin: 12px 16px 0; font-size: 13px; color: #bcc6d5; line-height: 1.5; }
+.voice-input { position: relative; }
+.voice-help { display: none; }
+.voice-input:focus-within .voice-help, .voice-input:hover .voice-help { display: block; position: absolute; z-index: 30; right: 0; top: 48px; width: min(300px, 70vw); background: #18212f; border: 1px solid #627083; border-radius: 10px; color: #f4f6fa; padding: 12px; font-size: 12px; }
+.voice-message { position: absolute; z-index: 20; right: 0; top: 48px; width: min(300px, 70vw); background: #18212f; padding: 12px; border-radius: 10px; font-size: 13px; color: #f4f6fa; }
+@media (max-width: 540px) { .main-search { padding: 18px 12px; } .main-search-bar { gap: 4px; padding-left: 14px; } .search-leading-icon { display: none; } }

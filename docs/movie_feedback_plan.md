@@ -1,7 +1,6 @@
 # Movie recommendation feedback and OPE plan
 
-Status: proposed implementation design. The application does not yet collect these
-events or run the experiment below. The existing movie ranking is unchanged.
+Status: implemented for the local pilot. This file preserves the original design rationale; [movie_ope.md](movie_ope.md) is the implemented contract and run guide. Collection is configurable (off / observe / randomized); real outcome collection is still required before a movie-policy improvement can be assessed.
 
 ## Purpose
 
@@ -27,7 +26,7 @@ these definitions before collection rather than choosing the best-looking one la
 - `frontend/src/App.tsx`: featured movie, detail dialog, favorites, hides and
   asynchronous recommendation updates. A session ID is already stored in the browser.
 
-What is missing: a durable decision/event store, display acknowledgments, response
+The design below called for a durable decision/event store, display acknowledgments, response
 events tied to the originating recommendation, known randomized selection
 probabilities, and a dataset builder for mature outcomes. Existing service logs
 and similarity scores do not supply those probabilities.
@@ -78,7 +77,7 @@ These logs evaluate featured-slot selection conditional on the recorded retrieva
 pool. They cannot establish the value of changing the retrieval catalog, the
 Weaviate index, or an entire recommendation slate.
 
-## Proposed event contracts
+## Event contract design
 
 Persist decisions separately from browser events, with versioned schemas.
 Use a transactional SQLite store for the local single-service prototype; use
@@ -147,7 +146,7 @@ candidate-set masks. Target probabilities must be zero outside each event's
 eligible set. Do not widen the candidate set after observing the reward. Hold out
 later collection windows, and use session-aware uncertainty analysis where feasible.
 
-## Implementation sequence and acceptance checks
+## Original implementation sequence and acceptance checks
 
 1. Extend serving contracts with server decision IDs and experimental metadata;
    add decision/event persistence and a validated event endpoint.
@@ -169,3 +168,8 @@ later collection windows, and use session-aware uncertainty analysis where feasi
 Deliverables: serving/event contracts, selector and storage, browser attribution,
 movie-log exporter, data-quality report, movie-feedback Data Card and run guide.
 Only after that collection can a separate movie-policy OPE report be produced.
+
+
+## Implementation mapping
+
+`serving/feedback.py` implements SQLite persistence, capability-bound events and featured selection. `frontend/src/feedback.ts` implements tab-scoped delivery and observation tracking; `App.tsx` binds the featured controls. `ope/movie.py` exports and evaluates mature observations; `ope/movie_pilot.py` exercises the path with labeled synthetic outcomes. The initial experiment is configurable rather than silently enabled for every deployment. See the run guide for the precise negative-outcome observation rule and current limitations.

@@ -87,7 +87,8 @@ def test_unknown_duplicate_and_contradictory_inputs_are_distinct_422_errors():
 
 
 def test_unconfigured_refinement_is_truthfully_unavailable():
-    with TestClient(create_app()) as client:
+    from trustworthy_recsys.serving.refinement import UnavailableInterpreter
+    with TestClient(create_app(interpreter=UnavailableInterpreter())) as client:
         response = client.post(
             "/api/v1/refinements",
             json={
@@ -125,6 +126,7 @@ def test_refinement_interpreter_boundary_accepts_deterministic_fake():
         "preference_revision": 1,
         "preferences": {**payload()["preferences"], "include_genres": ["Comedy"]},
         "summary": "Included Comedy.",
+        "resolved_movies": [],
     }
 
 

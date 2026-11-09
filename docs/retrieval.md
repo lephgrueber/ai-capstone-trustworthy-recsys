@@ -98,3 +98,16 @@ Generated prediction rows use `{"user_id": "...", "ranked_items": ["..."]}`, so 
 ## Measured artifacts
 
 The working model and descriptor are Git-ignored under `artifacts/retrieval/two_tower_80_weaviate`; its search index lives in the Weaviate Docker volume. The distributable model and complete prepared inputs are packaged separately in `models/two_tower_80_v1.zip`, tracked with Git LFS, with an adjacent SHA-256 checksum. Full reports and predictions remain Git-ignored under `results/retrieval/two_tower_80_weaviate`. Reviewable snapshots are in [retrieval_report.md](retrieval_report.md), [model_card_retrieval.md](model_card_retrieval.md), and [data_card_retrieval.md](data_card_retrieval.md). A fresh clone can download the trained bundle and populate a local database without the raw dataset or retraining. Previous local model/report directories are preserved as historical provenance and are not the active serving backend.
+
+## Repeated ANN comparison and portable reload check
+
+Use a fresh extraction/output directory. This benchmark requires the source MovieLens run recorded in the input metadata for validation histories, plus a running, already published matching Weaviate collection. It never deletes or republishes the collection.
+
+```powershell
+python -m trustworthy_recsys.retrieval.bundle unpack --bundle models/two_tower_80_v1.zip --output-dir data/downloads/reload_check
+python -m trustworthy_recsys.retrieval.benchmark --inputs-dir data/processed/retrieval_inputs_80 --model-dir artifacts/retrieval/two_tower_80_weaviate --reload-dir data/downloads/reload_check --output-dir results/retrieval/ann_check --users 200 --repetitions 3
+```
+
+The benchmark checks original versus extracted mappings, vectors and predictions; it performs the full remote index audit for both loads. It alternates ANN/exact query order, warms both indexes, and records raw timings at top-100 and top-500. See [the measured comparison](ann_benchmark.md) for acceptance targets, the failed speedup expectation, and startup costs. Outputs are immutable and an unfinished run retains its `INCOMPLETE` marker.
+
+The main-page [text/voice interface](natural_language_search.md) feeds existing preference inputs to retrieval. It does not change embeddings, train a new tower or add an automatic Weaviate vectorizer.

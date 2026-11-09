@@ -37,6 +37,7 @@ class RecommendationService:
     reranker: RerankingComponent
     backend_mode: str
     candidate_budget: int = 100
+    feedback_store: object | None = None
 
     def validate_preferences(self, request: RecommendationRequest) -> None:
         supplied = set(request.preferences.history_items) | set(request.preferences.excluded_movie_ids)
@@ -83,7 +84,8 @@ class RecommendationService:
             warnings=candidates.warnings,
         )
         try:
-            raw_ranked = self.reranker.rerank(query, filtered_batch, request.result_count)
+            ranking_limit = budget if self.feedback_store else request.result_count
+            raw_ranked = self.reranker.rerank(query, filtered_batch, ranking_limit)
             ranked = (
                 raw_ranked
                 if isinstance(raw_ranked, RankingResult)
@@ -98,7 +100,7 @@ class RecommendationService:
         ranked_ids = [item.movie_id for item in ranked.items]
         if any(movie_id not in allowed_ids for movie_id in ranked_ids):
             raise ComponentOutputError("reranker introduced or restored a filtered candidate")
-        if len(ranked.items) > request.result_count:
+        if len(ranked.items) > ranking_limit:
             raise ComponentOutputError("reranker exceeded the requested result count")
         # Defense in depth: reapply all hard constraints after reranking.
         if any(not self.catalog.allows(movie_id, request.preferences) for movie_id in ranked_ids):
@@ -120,7 +122,7 @@ class RecommendationService:
                 "The bounded candidate pool was exhausted after hard filtering; this does not prove the full catalog has no matches."
             )
         finished = time.perf_counter()
-        return RecommendationResponse(
+        response = RecommendationResponse(
             request_id=request_id or str(uuid.uuid4()),
             preference_revision=request.preference_revision,
             recommendations=recommendations,
@@ -137,3 +139,7 @@ class RecommendationService:
                 total_ms=(finished - started) * 1000,
             ),
         )
+        if self.feedback_store:
+            response = self.feedback_store.assign(request, response)
+            response.timings.total_ms = (time.perf_counter()-started)*1000
+        return response

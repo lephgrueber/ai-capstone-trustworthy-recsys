@@ -123,6 +123,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/feedback/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Feedback Events */
+        post: operations["feedback_events_api_v1_feedback_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -147,6 +164,12 @@ export interface components {
             posters_configured: boolean;
             /** Available Genres */
             available_genres: string[];
+            /**
+             * Feedback Mode
+             * @default off
+             * @enum {string}
+             */
+            feedback_mode: "off" | "observe" | "randomized";
         };
         /** AppliedRefinement */
         AppliedRefinement: {
@@ -160,6 +183,8 @@ export interface components {
             preferences: components["schemas"]["PreferenceState"];
             /** Summary */
             summary: string;
+            /** Resolved Movies */
+            resolved_movies?: components["schemas"]["CatalogMovie"][];
         };
         /** CatalogMovie */
         CatalogMovie: {
@@ -219,6 +244,74 @@ export interface components {
         /** ErrorResponse */
         ErrorResponse: {
             error: components["schemas"]["ErrorDetail"];
+        };
+        /** FeedbackAck */
+        FeedbackAck: {
+            /**
+             * Accepted
+             * @default true
+             */
+            accepted: boolean;
+            /** Duplicate */
+            duplicate: boolean;
+        };
+        /** FeedbackAssignment */
+        FeedbackAssignment: {
+            /** Decision Id */
+            decision_id: string;
+            /** Token */
+            token: string;
+            /** Assigned At */
+            assigned_at: string;
+            /** Movie Id */
+            movie_id: string;
+            /** Policy */
+            policy: string;
+            /** Propensity */
+            propensity: number;
+            /** Eligible Count */
+            eligible_count: number;
+            /**
+             * Age Ms
+             * @default 0
+             */
+            age_ms: number;
+            /**
+             * Outcome Window Seconds
+             * @default 1800
+             */
+            outcome_window_seconds: number;
+            /** Synthetic */
+            synthetic: boolean;
+        };
+        /** FeedbackEvent */
+        FeedbackEvent: {
+            /** Event Id */
+            event_id: string;
+            /** Decision Id */
+            decision_id: string;
+            /** Token */
+            token: string;
+            /** Movie Id */
+            movie_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "display" | "details_open" | "favorite_add" | "hide" | "heartbeat" | "window_end";
+            /** Elapsed Ms */
+            elapsed_ms: number;
+            /**
+             * Surface
+             * @default featured
+             * @constant
+             */
+            surface: "featured";
+            /**
+             * Stream Ok
+             * @default true
+             */
+            stream_ok: boolean;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -296,6 +389,8 @@ export interface components {
             result_count: number;
             /** Known User Id */
             known_user_id?: string | null;
+            /** Assignment Key */
+            assignment_key?: string | null;
         };
         /** RecommendationResponse */
         RecommendationResponse: {
@@ -315,6 +410,7 @@ export interface components {
             /** Warnings */
             warnings: string[];
             timings: components["schemas"]["Timings"];
+            feedback?: components["schemas"]["FeedbackAssignment"] | null;
         };
         /** RefinementRequest */
         RefinementRequest: {
@@ -596,6 +692,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AppliedRefinement"] | components["schemas"]["ClarificationRefinement"] | components["schemas"]["UnsupportedRefinement"] | components["schemas"]["UnavailableRefinement"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    feedback_events_api_v1_feedback_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackEvent"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackAck"];
                 };
             };
             /** @description Validation Error */

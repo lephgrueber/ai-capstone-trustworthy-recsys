@@ -1,0 +1,69 @@
+{
+  "synthetic": true,
+  "decisions": 100,
+  "partitions": {
+    "train": {
+      "rows": 80,
+      "sessions": 80,
+      "rewards": {
+        "positive": 20,
+        "unknown": 20,
+        "negative": 40
+      },
+      "display_acknowledged": 80,
+      "stream_complete": 40,
+      "start": 1800000000.0,
+      "end": 1800284400.0
+    },
+    "validation": {
+      "rows": 10,
+      "sessions": 10,
+      "rewards": {
+        "positive": 3,
+        "unknown": 3,
+        "negative": 4
+      },
+      "display_acknowledged": 10,
+      "stream_complete": 4,
+      "start": 1800376200.0,
+      "end": 1800408600.0
+    },
+    "test": {
+      "rows": 10,
+      "sessions": 10,
+      "rewards": {
+        "negative": 6,
+        "positive": 2,
+        "unknown": 2
+      },
+      "display_acknowledged": 10,
+      "stream_complete": 6,
+      "start": 1800500400.0,
+      "end": 1800532800.0
+    }
+  },
+  "test_logging_missing_outcome_interval": [
+    0.2,
+    0.4
+  ],
+  "test_effective_sample_size": 10.0,
+  "evaluation_status": "synthetic_validation_only",
+  "learned_backend_smoke": {
+    "synthetic": true,
+    "backend": "learned",
+    "recommendations": 12,
+    "eligible_featured_candidates": 25,
+    "selected_propensity": 0.904,
+    "hard_constraints_passed": true,
+    "decision_retry_deduplicated": true,
+    "event_retry_deduplicated": true,
+    "quality_claim": false
+  },
+  "claim": "Technical validation only. No real-user improvement claim.",
+  "outcome_availability_purge": {
+    "train": 0,
+    "validation": 0
+  },
+  "snapshot_sha256": "f04b31ddbd4edd561cec6a71a66b8a08bf6418f8e5d5bc42ffe5a4f24b8b3538",
+  "evidence_run": "results/movie_ope/synthetic_20261109_v3"
+}

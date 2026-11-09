@@ -68,3 +68,9 @@ Embedding row `i` maps to movie `item_ids.json[i]`. The source artifact manifest
 The packaged `weaviate.json` describes the original collection. The publication command creates a descriptor for your own collection, which is why prediction uses `artifacts/retrieval/team_80_weaviate` afterward.
 
 MovieLens data and transformations remain subject to the conditions in `MOVIELENS_README.txt`, including attribution and restrictions on commercial/revenue-bearing use. The repository's software license does not replace those dataset terms. This bundle is intended for the team's research workflow.
+
+## Verified loading and application search
+
+On November 9, a separately extracted copy of this bundle reproduced the original movie/user mappings, embedding matrix and 12 prediction probes against the live collection. See [the reload and ANN evidence](ann_benchmark.md). Full verified loading took roughly 10–14 seconds on that machine, so it should not be repeated for every request.
+
+For the browser application, follow [learned serving](../README.md#learned-movie-serving); it also needs the MovieLens metadata run. Restart the backend after updating the code and refresh the frontend. The main-page search supports genre requests and exact-title positive examples, with optional browser voice transcription. No retraining or embedding API key is required for this search feature.

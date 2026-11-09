@@ -20,8 +20,18 @@ class Settings:
     tmdb_read_access_token: str | None = None
     tmdb_timeout_seconds: float = 2.0
     poster_cache_size: int = 512
+    feedback_mode: str = 'off'
+    feedback_db: Path = Path('data/feedback/movie.sqlite3')
+    feedback_epsilon: float = 0.1
+    feedback_traffic: str = 'pilot'
 
     def __post_init__(self) -> None:
+        if self.feedback_mode not in {'off', 'observe', 'randomized'}:
+            raise ValueError('feedback mode must be off, observe or randomized')
+        if not 0 < self.feedback_epsilon <= 1:
+            raise ValueError('feedback epsilon must be in (0, 1]')
+        if self.feedback_traffic not in {'pilot', 'synthetic'}:
+            raise ValueError('feedback traffic must be pilot or synthetic')
         for name in ("run_dir", "retrieval_inputs_dir", "retrieval_model_dir", "reranker_model_dir"):
             value = getattr(self, name)
             if value is not None and not isinstance(value, Path):
@@ -42,6 +52,10 @@ class Settings:
         if not 10 <= budget <= 500:
             raise ValueError("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET must be between 10 and 500")
         return cls(
+            feedback_mode=os.getenv('TRUSTWORTHY_RECSYS_FEEDBACK_MODE', 'off'),
+            feedback_db=Path(os.getenv('TRUSTWORTHY_RECSYS_FEEDBACK_DB', 'data/feedback/movie.sqlite3')),
+            feedback_epsilon=float(os.getenv('TRUSTWORTHY_RECSYS_FEEDBACK_EPSILON', '0.1')),
+            feedback_traffic=os.getenv('TRUSTWORTHY_RECSYS_FEEDBACK_TRAFFIC', 'pilot'),
             backend_mode=os.getenv("TRUSTWORTHY_RECSYS_BACKEND", "fixture"),
             run_dir=Path(run) if run else None,
             retrieval_inputs_dir=Path(retrieval_inputs) if retrieval_inputs else None,

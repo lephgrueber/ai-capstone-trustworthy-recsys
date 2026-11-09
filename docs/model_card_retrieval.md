@@ -37,7 +37,7 @@ Metrics are macro user means from the existing evaluation harness. All and warm 
 
 Mean ANN overlap with exact filtered top-100 is 0.9989949748743719 on 199 validation users. This measures approximation fidelity, not relevance Recall@100. Detailed embedding/search and full-serving p50/p95/p99 timings are in report.json; model loading and disk I/O are excluded.
 
-Learned-path latency (milliseconds): p50=18.487150000055408, p95=35.51438000001781, p99=45.781578000146496. Popularity fallback served 17,467/22,015 test users (79.34%). Interpret the aggregate as a hybrid retriever plus fallback system.
+Learned-path latency (milliseconds): p50=22.693850012728944, p95=72.03073501586911, p99=360.2517660194988. Popularity fallback served 17,467/22,015 test users (79.34%). Interpret the aggregate as a hybrid retriever plus fallback system.
 
 ## Integrity, robustness and error analysis
 
@@ -61,3 +61,16 @@ A validation history ablation retained every second historical item while preser
 MovieLens terms and citation requirements apply to source data and derived artifacts; see the source and model-ready Data Cards. The repository software license does not replace dataset terms. No external pretrained weights are used.
 
 training.json records architecture, hyperparameters, selected checkpoint, package versions, code fingerprints, input hash and validation hash. Model and report manifests fingerprint generated artifacts. See docs/retrieval.md for commands and report.json for the exact evaluation protocol. Bit-for-bit reproducibility across library versions or hardware is not promised.
+
+## November 9, 2026 verification
+
+This snapshot comes from `results/retrieval/validation_20261109`. The frozen checkpoint was evaluated without retraining or test-based tuning. See [ANN and reload comparison](ann_benchmark.md) for repeated top-100/top-500 timings and portable bundle loading. See [natural-language search](natural_language_search.md) for the bounded text/voice interface, which converts requests to existing preference inputs and does not change the model weights. These scores exclude the optional LambdaRank reranker and are not an evaluation of speech recognition or language understanding.
+
+The full learned-path p99 in this rerun was 360.25 ms. See the [latency limitation](retrieval_report.md#latency-limitation-observed-in-this-rerun); search-only benchmark targets do not establish an end-to-end SLO.
+
+
+## Application feedback and movie-specific OPE
+
+A configurable featured-slot experiment now operates after retrieval, hard filtering and ranking. It records exact logging probabilities and frozen candidate sets in a local transactional store. The grid is fixed independently of the hero draw. This layer does not retrain the towers or establish a new retrieval-quality result. Collection defaults to off; [the pilot setup](movie_ope.md) explains enabling it and its displayed data-collection notice.
+
+The movie exporter/evaluator is implemented and validated with synthetic events and a learned-backend integration check. It reports complete-outcome estimates or missing-outcome sensitivity scenarios, session-cluster uncertainty and support diagnostics. It can compare featured choices only within the logged pool. There is no mature real-user movie-policy improvement claim yet. Open Bandit results remain separate. See [Movie Feedback Data Card](data_card_movie_feedback.md) and [validation](movie_ope_validation.md).
