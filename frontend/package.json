@@ -10,6 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:release:artwork": "playwright test --config=playwright.release.config.ts --project=release-artwork",
+    "test:e2e:release:no-artwork": "playwright test --config=playwright.release.config.ts --project=release-no-artwork",
     "schema:export": "../.venv/bin/python -m trustworthy_recsys.serving.export_openapi --output openapi.json",
     "client:generate": "openapi-typescript openapi.json -o src/api/schema.ts"
   },

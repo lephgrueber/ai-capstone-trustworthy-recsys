@@ -1,0 +1,244 @@
+{
+  "measured_at_utc": "2026-11-09T23:02:26.817181+00:00",
+  "environment": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "python": "3.13.7",
+    "process": "HTTP client to warm-running FastAPI at http://127.0.0.1:8000"
+  },
+  "conditions": {
+    "profile": "learned",
+    "warmups_per_workload": 0,
+    "repetitions_per_workload": 1,
+    "concurrency": 1
+  },
+  "timing_boundary": "Client POST start through complete backend HTTP response body; excludes browser rendering and artwork requests.",
+  "application_status": {
+    "backend_mode": "learned",
+    "model_label": "Learned retrieval + LambdaRank reranking",
+    "data_source_label": "Configured learned artifacts",
+    "refinement_available": true,
+    "poster_provider": "tmdb",
+    "posters_configured": true,
+    "available_genres": [
+      "Action",
+      "Adventure",
+      "Animation",
+      "Children",
+      "Comedy",
+      "Crime",
+      "Documentary",
+      "Drama",
+      "Fantasy",
+      "Film-Noir",
+      "Horror",
+      "IMAX",
+      "Musical",
+      "Mystery",
+      "Romance",
+      "Sci-Fi",
+      "Thriller",
+      "War",
+      "Western"
+    ],
+    "feedback_mode": "off"
+  },
+  "workloads": {
+    "learned_favorites": {
+      "samples": 1,
+      "warmup_errors": 0,
+      "measurement_errors": 0,
+      "client_round_trip": {
+        "mean_ms": 132.0869,
+        "median_ms": 132.0869,
+        "p50_ms": 132.0869,
+        "p95_ms": 132.0869,
+        "p99_ms": 132.0869,
+        "min_ms": 132.0869,
+        "max_ms": 132.0869
+      },
+      "server_orchestration": {
+        "mean_ms": 130.6773,
+        "median_ms": 130.6773,
+        "p50_ms": 130.6773,
+        "p95_ms": 130.6773,
+        "p99_ms": 130.6773,
+        "min_ms": 130.6773,
+        "max_ms": 130.6773
+      },
+      "displayed_count": 10,
+      "partial": false,
+      "backend": "learned",
+      "retrieval": {
+        "name": "two-tower-weaviate",
+        "version": "MovieLensTwoTower80M4Release84366c2:ab4837d3048b",
+        "mode": "learned"
+      },
+      "reranker": {
+        "name": "lambdarank",
+        "version": "lambdarank_v1:4c078ad298a7",
+        "mode": "learned"
+      },
+      "raw_samples": [
+        {
+          "sample": 1,
+          "status": 200,
+          "request_id": "d6987f91-4ee0-4881-9262-dd09ac4606c4",
+          "client_ms": 132.0869,
+          "server_total_ms": 130.6773,
+          "retrieval_ms": 33.4078,
+          "filtering_ms": 0.2169,
+          "reranking_ms": 96.9556
+        }
+      ]
+    },
+    "learned_genre_constraints": {
+      "samples": 1,
+      "warmup_errors": 0,
+      "measurement_errors": 0,
+      "client_round_trip": {
+        "mean_ms": 63.8026,
+        "median_ms": 63.8026,
+        "p50_ms": 63.8026,
+        "p95_ms": 63.8026,
+        "p99_ms": 63.8026,
+        "min_ms": 63.8026,
+        "max_ms": 63.8026
+      },
+      "server_orchestration": {
+        "mean_ms": 62.335,
+        "median_ms": 62.335,
+        "p50_ms": 62.335,
+        "p95_ms": 62.335,
+        "p99_ms": 62.335,
+        "min_ms": 62.335,
+        "max_ms": 62.335
+      },
+      "displayed_count": 10,
+      "partial": false,
+      "backend": "learned",
+      "retrieval": {
+        "name": "two-tower-weaviate",
+        "version": "MovieLensTwoTower80M4Release84366c2:ab4837d3048b",
+        "mode": "learned"
+      },
+      "reranker": {
+        "name": "lambdarank",
+        "version": "lambdarank_v1:4c078ad298a7",
+        "mode": "learned"
+      },
+      "raw_samples": [
+        {
+          "sample": 1,
+          "status": 200,
+          "request_id": "6b8c21c8-31a8-424a-b747-53d7c2f4ca4e",
+          "client_ms": 63.8026,
+          "server_total_ms": 62.335,
+          "retrieval_ms": 33.495,
+          "filtering_ms": 0.7578,
+          "reranking_ms": 28.0157
+        }
+      ]
+    }
+  },
+  "concurrent_check": {
+    "concurrency": 5,
+    "errors": 0,
+    "client_round_trip": {
+      "mean_ms": 216.3587,
+      "median_ms": 217.443,
+      "p50_ms": 217.443,
+      "p95_ms": 218.1435,
+      "p99_ms": 218.1435,
+      "min_ms": 211.2369,
+      "max_ms": 218.1435
+    },
+    "raw_samples": [
+      {
+        "sample": 1,
+        "status": 200,
+        "client_ms": 211.2369,
+        "request_id": "80a68b9d-79ee-41d7-978b-7feee1156c7a",
+        "backend": "learned",
+        "retrieval": {
+          "name": "two-tower-weaviate",
+          "version": "MovieLensTwoTower80M4Release84366c2:ab4837d3048b",
+          "mode": "learned"
+        },
+        "reranker": {
+          "name": "lambdarank",
+          "version": "lambdarank_v1:4c078ad298a7",
+          "mode": "learned"
+        }
+      },
+      {
+        "sample": 2,
+        "status": 200,
+        "client_ms": 216.899,
+        "request_id": "988171b3-0748-4538-ae7a-733b14871f8a",
+        "backend": "learned",
+        "retrieval": {
+          "name": "two-tower-weaviate",
+          "version": "MovieLensTwoTower80M4Release84366c2:ab4837d3048b",
+          "mode": "learned"
+        },
+        "reranker": {
+          "name": "lambdarank",
+          "version": "lambdarank_v1:4c078ad298a7",
+          "mode": "learned"
+        }
+      },
+      {
+        "sample": 3,
+        "status": 200,
+        "client_ms": 218.1435,
+        "request_id": "b8edac3c-982a-417f-84a0-94eec392418d",
+        "backend": "learned",
+        "retrieval": {
+          "name": "two-tower-weaviate",
+          "version": "MovieLensTwoTower80M4Release84366c2:ab4837d3048b",
+          "mode": "learned"
+        },
+        "reranker": {
+          "name": "lambdarank",
+          "version": "lambdarank_v1:4c078ad298a7",
+          "mode": "learned"
+        }
+      },
+      {
+        "sample": 4,
+        "status": 200,
+        "client_ms": 217.443,
+        "request_id": "4d966785-e98e-41a9-8af0-3b5bd2bbbff2",
+        "backend": "learned",
+        "retrieval": {
+          "name": "two-tower-weaviate",
+          "version": "MovieLensTwoTower80M4Release84366c2:ab4837d3048b",
+          "mode": "learned"
+        },
+        "reranker": {
+          "name": "lambdarank",
+          "version": "lambdarank_v1:4c078ad298a7",
+          "mode": "learned"
+        }
+      },
+      {
+        "sample": 5,
+        "status": 200,
+        "client_ms": 218.071,
+        "request_id": "3b62fefa-6ce0-4e8a-8b51-e3ecbabaf25d",
+        "backend": "learned",
+        "retrieval": {
+          "name": "two-tower-weaviate",
+          "version": "MovieLensTwoTower80M4Release84366c2:ab4837d3048b",
+          "mode": "learned"
+        },
+        "reranker": {
+          "name": "lambdarank",
+          "version": "lambdarank_v1:4c078ad298a7",
+          "mode": "learned"
+        }
+      }
+    ]
+  }
+}

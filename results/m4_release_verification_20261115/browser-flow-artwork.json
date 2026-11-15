@@ -1,0 +1,139 @@
+{
+  "text_entry_submission_to_response_and_summary_ms": 285,
+  "timing_boundary": "Before search-field fill through recommendation response receipt and updated preference-summary visibility in Chromium; excludes completion of all result cards and artwork.",
+  "artwork_enabled": true,
+  "artwork_resource_count": 24,
+  "artwork_resources": [
+    {
+      "name": "https://image.tmdb.org/t/p/w1280/suaEOtk1N1sgg2MTM7oZd2cfVp3.jpg",
+      "startTime": 473.2000000178814,
+      "duration": 967
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/vQWk5YBFWF4bZaofAbv0tShwBvQ.jpg",
+      "startTime": 479.5,
+      "duration": 769.4000000059605
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/xlaY2zyzMfkhk0HSC5VUwzoZPU1.jpg",
+      "startTime": 479.5,
+      "duration": 899.5
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/dXNAPwY7VrqMAo51EKhhCJfaGb5.jpg",
+      "startTime": 479.5,
+      "duration": 926.6000000238419
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/9cqNxx0GxF0bflZmeSMuL5tnGzr.jpg",
+      "startTime": 479.5,
+      "duration": 954.8000000119209
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/saHP97rTPS5eLmrLQEcANmKrsFl.jpg",
+      "startTime": 479.5,
+      "duration": 960.9000000059605
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/sF1U4EUQS8YHUYjNl3pMGNIQyr0.jpg",
+      "startTime": 479.5,
+      "duration": 961.3000000119209
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/uS9m8OBk1A8eM9I042bx8XXpqAq.jpg",
+      "startTime": 479.5,
+      "duration": 1016.8000000119209
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/jSziioSwPVrOy9Yow3XhWIBDjq1.jpg",
+      "startTime": 479.5,
+      "duration": 1018.1000000238419
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/6oom5QYQ2yQTMJIbnvbkBL9cHo6.jpg",
+      "startTime": 479.5,
+      "duration": 1018.4000000059605
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/qJ2tW6WMUDux911r6m7haRef0WH.jpg",
+      "startTime": 479.5,
+      "duration": 1018.9000000059605
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/5VTN0pR8gcqV3EPUHHfMGnJYN9L.jpg",
+      "startTime": 479.60000002384186,
+      "duration": 961
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/rCzpDGLbOoPwLjy3OAm5NUPOTrC.jpg",
+      "startTime": 479.60000002384186,
+      "duration": 998.8999999761581
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/uXDfjJbdP4ijW5hWSBrPrlKpxab.jpg",
+      "startTime": 895.9000000059605,
+      "duration": 602.3000000119209
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w1280/2Biv1mSzaaxWOqvcnDZn4GcYEAb.jpg",
+      "startTime": 2472.800000011921,
+      "duration": 46.900000005960464
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/zscUsmzDJFZjUY8f8BQqMSWlmNQ.jpg",
+      "startTime": 2473.9000000059605,
+      "duration": 49.099999994039536
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/wFSpyMsp7H0ttERbxY7Trlv8xry.jpg",
+      "startTime": 2473.9000000059605,
+      "duration": 51.80000001192093
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/eHuGQ10FUzK1mdOY69wF5pGgEf5.jpg",
+      "startTime": 2473.9000000059605,
+      "duration": 55.400000005960464
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/poHwCZeWzJCShH7tOjg8RIoyjcw.jpg",
+      "startTime": 2473.9000000059605,
+      "duration": 85.5
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/2LqaLgk4Z226KkgPJuiOQ58wvrm.jpg",
+      "startTime": 2473.9000000059605,
+      "duration": 85.59999999403954
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/vN5B5WgYscRGcQpVhHl6p9DDTP0.jpg",
+      "startTime": 2473.9000000059605,
+      "duration": 91.2000000178814
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/fai0rspsNeJCS69wHNjOdWxcI7P.jpg",
+      "startTime": 2473.9000000059605,
+      "duration": 93.90000000596046
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/2FC9L9MrjBoGHYjYZjdWQdopVYb.jpg",
+      "startTime": 2473.9000000059605,
+      "duration": 95.2000000178814
+    },
+    {
+      "name": "https://image.tmdb.org/t/p/w500/mFvoEwSfLqbcWwFsDjQebn9bzFe.jpg",
+      "startTime": 2473.9000000059605,
+      "duration": 98
+    }
+  ],
+  "final_request_id": "d3dd0b04-8cf9-4d3e-9530-0427aef62da5",
+  "retrieval": {
+    "name": "two-tower-weaviate",
+    "version": "MovieLensTwoTower80M4Release84366c2:ab4837d3048b",
+    "mode": "learned"
+  },
+  "reranker": {
+    "name": "lambdarank",
+    "version": "lambdarank_v1:4c078ad298a7",
+    "mode": "learned"
+  }
+}

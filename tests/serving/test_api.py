@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from types import SimpleNamespace
 
 import pandas as pd
@@ -34,6 +35,15 @@ def test_health_readiness_and_search():
         response = client.get("/api/v1/catalog/search", params={"q": "signal", "limit": 5})
         assert response.status_code == 200
         assert response.json()["items"][0]["movie_id"] == "101"
+
+
+def test_startup_log_identifies_active_components(caplog):
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        with TestClient(create_app()) as client:
+            assert client.get("/ready").status_code == 200
+    assert "backend_ready mode=fixture" in caplog.text
+    assert "retrieval=fixture-genre-retrieval" in caplog.text
+    assert "reranker=pass-through" in caplog.text
 
 
 def test_catalog_search_keeps_punctuation_prefixed_titles():

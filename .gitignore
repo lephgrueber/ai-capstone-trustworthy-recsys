@@ -25,6 +25,7 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
+tmp/
 
 # Generated smoke-test output
 results/smoke/*.json
