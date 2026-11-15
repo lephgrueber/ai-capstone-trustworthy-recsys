@@ -354,7 +354,7 @@ $env:TRUSTWORTHY_RECSYS_SCENARIO = "ratio_80_10_10"
 
 ```bash
 TRUSTWORTHY_RECSYS_BACKEND=baseline \
-TRUSTWORTHY_RECSYS_RUN_DIR=data/processed/<completed_run> \
+TRUSTWORTHY_RECSYS_RUN_DIR="data/processed/your_completed_run" \
 TRUSTWORTHY_RECSYS_SCENARIO=ratio_80_10_10 \
 .venv/bin/python -m uvicorn trustworthy_recsys.serving.app:app --host 127.0.0.1 --port 8000
 ```
@@ -391,7 +391,7 @@ For learned serving:
 
    ```bash
    export TRUSTWORTHY_RECSYS_BACKEND=learned
-   export TRUSTWORTHY_RECSYS_RUN_DIR=data/processed/<matching-completed-run>
+   export TRUSTWORTHY_RECSYS_RUN_DIR="data/processed/your_matching_completed_run"
    export TRUSTWORTHY_RECSYS_RETRIEVAL_INPUTS_DIR=data/downloads/two_tower_80_v1/inputs
    export TRUSTWORTHY_RECSYS_RETRIEVAL_MODEL_DIR="path/to/your/publication"
    ```
