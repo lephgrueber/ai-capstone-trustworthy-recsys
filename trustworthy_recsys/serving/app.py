@@ -45,7 +45,7 @@ from trustworthy_recsys.serving.refinement import RefinementInterpreter, Unavail
 from trustworthy_recsys.serving.posters import PosterService, build_poster_service
 from trustworthy_recsys.serving.service import ComponentOutputError, RecommendationService, ServiceInputError
 
-logger = logging.getLogger("trustworthy_recsys.serving")
+logger = logging.getLogger("uvicorn.error")
 
 
 @dataclass
@@ -144,6 +144,17 @@ def _load_runtime(
                          ('inputs', settings.retrieval_inputs_dir), ('reranker', settings.reranker_model_dir)]
                         if root is not None and (root/'manifest.json').exists()},
                 }) if settings.feedback_mode != 'off' else None,
+        )
+        logger.info(
+            "backend_ready mode=%s retrieval=%s retrieval_version=%s reranker=%s "
+            "reranker_version=%s candidate_budget=%s posters_configured=%s",
+            settings.backend_mode,
+            retrieval.info.name,
+            retrieval.info.version,
+            reranker.info.name,
+            reranker.info.version,
+            settings.candidate_budget,
+            runtime.posters.configured,
         )
     except (ValueError, OSError, sqlite3.Error) as error:
         if retrieval is not None:
