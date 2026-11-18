@@ -52,6 +52,19 @@ The output contains original MovieLens IDs. Supply previously liked movies in `-
 
 On later sessions, start Docker and run the prediction command. You do not need to extract or publish again. The database persists in a named Docker volume; removing that volume requires republishing.
 
+For the full browser application, an existing compatible publication can be
+reused by `compose.application.yml`; the application Compose file does not contain
+a Weaviate service and cannot create or republish the collection. Inspect the
+existing container, volume, and network first, then mount the complete prepared
+run, retrieval inputs, publication directory, and `lambdarank_v1` directory as
+described in [Full application containers](container_application.md). The prepared
+run must include its training interactions because LambdaRank reconstructs the
+saved feature tables at startup.
+
+On a genuinely new installation, the publication command above remains an
+explicit one-time setup action. Always choose a new output directory and
+collection name. Docker application startup never performs that action.
+
 ## Included files and provenance
 
 | Location inside the archive | Contents |

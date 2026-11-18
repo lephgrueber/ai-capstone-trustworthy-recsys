@@ -259,6 +259,40 @@ describe("browser rating workflow", () => {
     expect(screen.getByRole("combobox", { name: "Search for a movie by title or release year" })).toHaveValue("Signal");
   });
 
+  it("shows main-page Retry when a title-only refresh fails and preserves temporary context", async () => {
+    let recommendationCount = 0;
+    const fetch = mockApi((body) => {
+      recommendationCount += 1;
+      if (recommendationCount === 2) return json({ error: { message: "Controlled title refresh failure" } }, 503);
+      return json(rec(body.preference_revision, body.preferences));
+    });
+    vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("heading", { name: "Explore movies" });
+
+    await user.click(screen.getByRole("tab", { name: "Find recommendations" }));
+    await user.type(screen.getByRole("textbox", { name: "Describe the movies you want" }), "movies like The Matrix");
+    await user.click(screen.getByRole("button", { name: /^Find recommendations$/ }));
+
+    const failure = await screen.findByRole("alert");
+    expect(failure).toHaveTextContent("Controlled title refresh failure");
+    const summary = failure.closest<HTMLElement>(".personalization-summary")!;
+    expect(summary).toBeTruthy();
+    const retry = within(summary).getByRole("button", { name: "Retry" });
+    expect(retry).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Signal in the Fog", level: 1 })).toBeInTheDocument();
+    expect(localStorage.getItem(PROFILE_STORAGE_KEY)).toBeNull();
+
+    await user.click(retry);
+    await waitFor(() => expect(recommendationCount).toBe(3));
+    const recommendationCalls = fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
+    expect(JSON.parse(String(recommendationCalls.at(-1)![1]?.body))).toMatchObject({
+      preference_revision: 1,
+      temporary_history_items: ["2571"],
+      preferences: EMPTY,
+    });
+    expect(localStorage.getItem(PROFILE_STORAGE_KEY)).toBeNull();
+  });
+
   it("Undo restores an empty temporary title context and advances the request revision", async () => {
     const ratedAt = "2026-11-17T12:00:00.000Z";
     localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify({ version: 1, ratings: [{ movie_id: "101", rating: 4.5, rated_at: ratedAt }], legacy_favorites: [], movies: { "101": MOVIES[0] } }));

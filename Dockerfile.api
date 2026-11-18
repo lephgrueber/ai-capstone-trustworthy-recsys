@@ -1,0 +1,55 @@
+# syntax=docker/dockerfile:1.7
+
+ARG PYTHON_IMAGE=python:3.13.7-slim-bookworm
+FROM ${PYTHON_IMAGE} AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY constraints/application-linux-py313.txt constraints/application-linux-py313.txt
+COPY pyproject.toml README.md ./
+COPY trustworthy_recsys/ trustworthy_recsys/
+COPY eval/ eval/
+
+RUN python -m pip install --upgrade "pip==25.2" "setuptools==84.2.1" \
+    && python -m pip install \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --constraint constraints/application-linux-py313.txt \
+        "torch==2.10.0" \
+    && python -m pip install \
+        --constraint constraints/application-linux-py313.txt \
+        ".[retrieval,rank,serve]"
+
+COPY docker/api-entrypoint.sh /usr/local/bin/api-entrypoint
+
+RUN chmod 0555 /usr/local/bin/api-entrypoint \
+    && useradd --create-home --uid 10001 --shell /usr/sbin/nologin app
+
+USER app
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=180s --retries=12 \
+    CMD curl --fail --silent http://127.0.0.1:8000/ready >/dev/null || exit 1
+
+ENTRYPOINT ["api-entrypoint"]
+CMD ["python", "-m", "uvicorn", "trustworthy_recsys.serving.app:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]
+
+FROM runtime AS test
+
+USER root
+COPY tests/ tests/
+COPY data/golden_set_50.jsonl data/golden_set_50.jsonl
+RUN python -m pip install \
+    --constraint constraints/application-linux-py313.txt \
+    ".[dev,app-dev]" \
+    "pytest==8.4.2"
+USER app

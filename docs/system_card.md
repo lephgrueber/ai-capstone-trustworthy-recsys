@@ -1,8 +1,8 @@
 # System Card: Trustworthy Recommendation System
 
-**Status:** Local release candidate tested with two-tower retrieval and LambdaRank
+**Status:** Local release candidate with containerized API/frontend and saved-model serving
 
-**Last updated:** November 17, 2026
+**Last updated:** November 18, 2026
 
 ## Overview and intended use
 
@@ -52,6 +52,10 @@ The API rejects unknown/duplicate IDs, non-finite or non-half-star ratings, non-
 
 If an update fails, the app keeps the earlier results and pending edits. Visitors can retry or reset their preferences. Request-sequence and revision checks prevent an older response from replacing newer results.
 
+The main page exposes that failure and Retry even when the only active request
+context is a temporary “movies like” title. Retry resubmits the same temporary
+context, durable preferences, and revision without creating a rating or favorite.
+
 Backend labels, component information, warnings, and timing fields show which configuration is active.
 
 ## Threat model
@@ -67,6 +71,17 @@ Startup checks confirm that the model files and Weaviate collection are compatib
 The retrieval evaluation reports higher Recall@100 than matched-policy popularity, with frequent popularity fallback in the offline test population. Results cover one split and seed. The [retrieval report](retrieval_report.md) and [Retrieval Model Card](model_card_retrieval.md) provide the metrics and methodology.
 
 Application tests passed for validation, filtering, persistence, automatic updates, stale-response handling, and recovery. On November 17 the opt-in integration check used the saved two-tower model, live `MovieLensTwoTower80M4Release84366c2` collection, and saved LambdaRank model. A request with 5.0, 3.0, and 2.5 ratings reached the matrix as mean `3.5`, `log1p(3)`, and `1.0` inactive day; only the 5.0 item supplied positive history and all three rated IDs were absent from displayed results. The learned Chromium flow passed with real TMDb artwork and controlled Retry. This verifies plumbing, not improved recommendation quality.
+
+On November 18 the declared Linux ARM64 images were built from both the working
+candidate and a separate clean source tree. The container suites passed 205
+backend tests with 2 explicit skips and 36 frontend unit tests, followed by
+typecheck and production build. Browser checks through the production nginx
+proxy passed for title-only failure/Retry, rating persistence and recovery,
+temporary-context Undo, visit-only Hide/Unhide/reload, stale responses, and
+artwork-enabled and artwork-disabled operation. The same saved models,
+prepared data, and populated collection were reused; no training or publication
+was performed. These are application compatibility checks, not evidence of
+improved recommendation quality or container performance under load.
 
 The [M4 release report](m4_release_check_20261109.md) records request IDs, p50/p99 HTTP and component timings, a five-request concurrency check, browser and artwork results, logs, and cost assumptions. Feedback collection was off during these measurements. These checks test application behavior and local latency, not recommendation quality or performance under sustained load.
 
@@ -85,6 +100,13 @@ The regular browser artwork tests use mocked responses; the selected release tes
 
 Learned mode needs compatible prepared inputs, saved model files, MovieLens catalog metadata, and a Weaviate publication. Weaviate must be reachable at startup and during vector search. Failed startup checks leave the backend unavailable rather than switching to the genre baseline. `/ready` confirms startup success, not ongoing database availability.
 
+The full-container launch mounts those four compatible directories read-only and
+joins an existing Weaviate network. It does not train or publish. The nginx
+frontend proxies only the API/status/schema routes and excludes query strings and
+request bodies from its access-log format. TMDb credentials are API runtime
+configuration and are never frontend build variables. Native Mac latency results
+in the dated release report are not container performance measurements.
+
 Missing TMDb credentials or artwork, and provider errors handled by the app, use neutral artwork. Malformed local metadata can still prevent startup, as noted above.
 
 The app has no production authentication, rate limiting, or automated monitoring. The local SQLite feedback store is not designed for multiple application instances. Setup and run instructions are in the [README](../README.md).
@@ -94,6 +116,7 @@ The app has no production authentication, rate limiting, or automated monitoring
 Follow the [README](../README.md) for commands and the [model setup guide](team_model_setup.md) for extracting the saved model and publishing its embeddings.
 
 - [ ] Install the Python and frontend dependencies, including the ranking dependencies.
+- [ ] For the full application, build the declared Linux images and inspect the existing Weaviate project, volume, and network before starting `compose.application.yml`.
 - [ ] Obtain a compatible MovieLens data run and extract the saved model bundle. No model retraining is required.
 - [ ] Start Weaviate and use a compatible publication. Use fresh output directories and collection names when publishing saved embeddings.
 - [ ] Configure learned retrieval and the saved LambdaRank model, set `TRUSTWORTHY_RECSYS_FEEDBACK_MODE=off` for measurements, and start the API and frontend.

@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
 
 const evidenceFile = resolve(process.cwd(), process.env.M4_RELEASE_EVIDENCE_DIR ?? "../tmp/rating_profile_verification_20261117", "browser-flow-artwork.json");
+const containerEvidenceDir = process.env.M4_CONTAINER_EVIDENCE_DIR;
 
 test("real learned browser flow submits ratings to two-tower and LambdaRank", async ({ page, request }) => {
   const status = await (await request.get("/api/v1/application/status")).json();
@@ -85,4 +86,67 @@ test("one controlled recommendation failure preserves a saved rating and retries
   const recovered = await (await recovery).json();
   expect(recovered.reranker.name).toBe("lambdarank");
   expect(recovered.applied_preferences.ratings[0].rating).toBe(3.5);
+});
+
+test("title-only recommendation failure exposes main-page Retry with durable state unchanged", async ({ page, request }) => {
+  expect((await (await request.get("/api/v1/application/status")).json()).backend_mode).toBe("learned");
+  let failTitleRecommendation = true;
+  await page.route("**/api/v1/recommendations", async (route) => {
+    const body = route.request().postDataJSON();
+    if (failTitleRecommendation && body.temporary_history_items?.includes("2571")) {
+      failTitleRecommendation = false;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({
+        error: { code: "controlled_title_refresh", message: "Controlled title refresh failure." },
+      }) });
+    } else await route.continue();
+  });
+  await page.addInitScript(() => localStorage.clear());
+  const initialResponse = page.waitForResponse((response) => response.url().endsWith("/recommendations") && response.ok());
+  await page.goto("/");
+  await initialResponse;
+  const durableBefore = await page.evaluate(() => localStorage.getItem("trustworthy-recsys-browser-profile-v1"));
+
+  await page.getByRole("tab", { name: "Find recommendations" }).click();
+  await page.getByRole("textbox", { name: "Describe the movies you want" }).fill("movies like The Matrix");
+  const failedRequest = page.waitForRequest((candidate) => candidate.url().endsWith("/recommendations") &&
+    candidate.postDataJSON().temporary_history_items?.includes("2571"));
+  await page.getByRole("button", { name: "Find recommendations", exact: true }).click();
+  expect((await failedRequest).postDataJSON()).toMatchObject({
+    preference_revision: 1,
+    temporary_history_items: ["2571"],
+    preferences: { ratings: [], history_items: [] },
+  });
+
+  const alert = page.locator(".personalization-summary").getByRole("alert");
+  await expect(alert).toContainText("Controlled title refresh failure.");
+  await expect(page.locator(".recommendation-section article").first()).toBeVisible();
+  const retry = page.locator(".personalization-summary").getByRole("button", { name: "Retry" });
+  await expect(retry).toBeVisible();
+  if (containerEvidenceDir) {
+    mkdirSync(containerEvidenceDir, { recursive: true });
+    await page.screenshot({ path: resolve(containerEvidenceDir, "title-only-failure-main-page.png"), fullPage: true });
+  }
+  const retryRequest = page.waitForRequest((candidate) => candidate.url().endsWith("/recommendations") &&
+    candidate.postDataJSON().temporary_history_items?.includes("2571"));
+  const retryResponse = page.waitForResponse((response) => response.url().endsWith("/recommendations") && response.ok());
+  await retry.click();
+  expect((await retryRequest).postDataJSON()).toMatchObject({ preference_revision: 1, temporary_history_items: ["2571"] });
+  const recovered = await (await retryResponse).json();
+  expect(recovered.retrieval.name).toBe("two-tower-weaviate");
+  expect(recovered.reranker.name).toBe("lambdarank");
+  expect(recovered.recommendations.every((item: { movie: { movie_id: string } }) => item.movie.movie_id !== "2571")).toBe(true);
+  expect(await page.evaluate(() => localStorage.getItem("trustworthy-recsys-browser-profile-v1"))).toBe(durableBefore);
+  if (containerEvidenceDir) {
+    await page.screenshot({ path: resolve(containerEvidenceDir, "title-only-retry-recovered.png"), fullPage: true });
+    const payloadEvidence = resolve(containerEvidenceDir, "title-only-failure-retry.json");
+    if (!existsSync(payloadEvidence)) {
+      writeFileSync(payloadEvidence, JSON.stringify({
+        durable_profile_before: durableBefore,
+        durable_profile_after: await page.evaluate(() => localStorage.getItem("trustworthy-recsys-browser-profile-v1")),
+        failed_request: (await failedRequest).postDataJSON(),
+        retry_request: (await retryRequest).postDataJSON(),
+        recovery: { retrieval: recovered.retrieval, reranker: recovered.reranker, matrix_excluded: true },
+      }, null, 2) + "\n", { flag: "wx" });
+    }
+  }
 });

@@ -1,0 +1,95 @@
+name: trustworthy-recsys-application
+
+services:
+  api:
+    image: trustworthy-recsys-application-api:local
+    platform: ${APPLICATION_PLATFORM:-linux/arm64}
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      target: runtime
+    init: true
+    restart: unless-stopped
+    environment:
+      TRUSTWORTHY_RECSYS_BACKEND: learned
+      TRUSTWORTHY_RECSYS_RUN_DIR: /runtime/run
+      TRUSTWORTHY_RECSYS_SCENARIO: ratio_80_10_10
+      TRUSTWORTHY_RECSYS_RETRIEVAL_INPUTS_DIR: /runtime/retrieval-inputs
+      TRUSTWORTHY_RECSYS_RETRIEVAL_MODEL_DIR: /runtime/retrieval-model
+      TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR: /runtime/lambdarank_v1
+      TRUSTWORTHY_RECSYS_FEEDBACK_MODE: ${TRUSTWORTHY_RECSYS_FEEDBACK_MODE:-off}
+      TRUSTWORTHY_RECSYS_FEEDBACK_DB: /runtime/feedback/movie.sqlite3
+      TRUSTWORTHY_RECSYS_FEEDBACK_EPSILON: ${TRUSTWORTHY_RECSYS_FEEDBACK_EPSILON:-0.1}
+      TRUSTWORTHY_RECSYS_FEEDBACK_TRAFFIC: ${TRUSTWORTHY_RECSYS_FEEDBACK_TRAFFIC:-pilot}
+      TMDB_READ_ACCESS_TOKEN: ${TMDB_READ_ACCESS_TOKEN:-}
+      WEAVIATE_HOST: ${WEAVIATE_HOST:-weaviate}
+      WEAVIATE_PORT: ${WEAVIATE_PORT:-8080}
+      WEAVIATE_GRPC_PORT: ${WEAVIATE_GRPC_PORT:-50051}
+      WEAVIATE_STARTUP_TIMEOUT_SECONDS: ${WEAVIATE_STARTUP_TIMEOUT_SECONDS:-180}
+    volumes:
+      - type: bind
+        source: ${TRUSTWORTHY_RECSYS_RUN_DIR:?set TRUSTWORTHY_RECSYS_RUN_DIR to the complete prepared run}
+        target: /runtime/run
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${TRUSTWORTHY_RECSYS_RETRIEVAL_INPUTS_DIR:?set TRUSTWORTHY_RECSYS_RETRIEVAL_INPUTS_DIR}
+        target: /runtime/retrieval-inputs
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${TRUSTWORTHY_RECSYS_RETRIEVAL_MODEL_DIR:?set TRUSTWORTHY_RECSYS_RETRIEVAL_MODEL_DIR}
+        target: /runtime/retrieval-model
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR:?set TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR}
+        target: /runtime/lambdarank_v1
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: application_feedback
+        target: /runtime/feedback
+    networks:
+      - application
+      - existing_weaviate
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/ready"]
+      interval: 10s
+      timeout: 5s
+      start_period: 180s
+      retries: 12
+
+  frontend:
+    image: trustworthy-recsys-application-frontend:local
+    platform: ${APPLICATION_PLATFORM:-linux/arm64}
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: runtime
+    init: true
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${APPLICATION_PORT:-15173}:8080"
+    networks:
+      - application
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  application_feedback:
+
+networks:
+  application:
+  existing_weaviate:
+    external: true
+    name: ${WEAVIATE_NETWORK:-ai-capstone-trustworthy-recsys_default}

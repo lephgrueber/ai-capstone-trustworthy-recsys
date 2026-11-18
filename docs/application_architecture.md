@@ -48,5 +48,22 @@ When feedback collection is enabled, recommendation serving records the randomiz
 ## Operational references
 
 - [README setup, M4 reviewer entry point, and safe reproduction commands](../README.md)
+- [Full Linux API/frontend container packaging and existing-Weaviate reuse](container_application.md)
 - [Application System Card, safeguards, risks, and reproduction checklist](system_card.md)
 - [Natural-language and voice search behavior](natural_language_search.md)
+
+## Container deployment boundary
+
+The production frontend image serves the built React bundle through an
+unprivileged nginx process. `/api/`, `/health`, `/ready`, and `/openapi.json` are
+proxied to the API container; all other unknown paths use the SPA fallback.
+`index.html` is not cached, while content-hashed assets are immutable. Proxy logs
+record the path without query strings and never log request bodies.
+
+The API image contains the application package trees and Linux dependencies but
+no models or datasets. The complete prepared run, retrieval inputs, published
+retrieval model, and `lambdarank_v1` directory are mounted read-only. The API joins
+the explicitly inspected external Weaviate network and uses the `weaviate` service
+name rather than container-local `localhost`. A bounded entrypoint wait precedes
+the existing startup artifact and remote-vector audits. This establishes startup
+readiness only; it does not prove recovery from a later Weaviate outage.

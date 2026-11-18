@@ -412,7 +412,7 @@ export function App() {
   const applied = result?.applied_preferences;
   const appliedSummary = summarizePreferences(applied ?? EMPTY);
   const appliedHasPreferences = Boolean(applied && hasPreferences(applied));
-  const showPreferenceSummary = appliedHasPreferences || dirty || hasPreferences(preferences);
+  const showPreferenceSummary = Boolean(failure) || appliedHasPreferences || dirty || hasPreferences(preferences);
   const activeChips = [...preferences.include_genres.map((genre) => ({ kind: "include", label: `Include: ${genre}`, remove: () => toggleGenre(genre, "include") })), ...preferences.exclude_genres.map((genre) => ({ kind: "avoid", label: `Avoid: ${genre}`, remove: () => toggleGenre(genre, "avoid") }))];
   const formattedDetail = detail ? formatCatalogTitle(detail.title) : null;
   const ratingNotice = ratingNoticeActive ? <div className={`rating-notice ${failure && ratingNoticeRefresh ? "error" : ""}`} role={failure && ratingNoticeRefresh ? "alert" : "status"}><span>{ratingNoticeRefresh && loading ? "Rating saved. Updating recommendations…" : ratingNoticeRefresh && failure ? "Rating saved. Recommendations couldn’t update." : "Rating saved."}</span>{ratingNoticeRefresh && failure && !loading ? <Button onClick={() => void recommend(preferencesRef.current, revisionRef.current)}>Retry</Button> : null}</div> : null;
