@@ -10,6 +10,7 @@ pytest.importorskip("scipy")
 from eval.harness import EvalExample
 from trustworthy_recsys.ranking.dataset import build_rows, to_table
 from trustworthy_recsys.ranking.features import FEATURE_NAMES, RankingFeatures, release_year
+from trustworthy_recsys.serving.contracts import RatingStatistics
 
 DAY = 86_400
 CUTOFF = 400 * DAY
@@ -73,6 +74,24 @@ def test_history_is_deduplicated_and_unknown_ids_ignored():
     assert list(features.history_indices(["b", "zz", "a", "b"])) == [1, 0]
     same = features.build(["a", "zz", "a"], [1, 2])
     assert np.array_equal(same, features.build(["a"], [1, 2]), equal_nan=True)
+
+
+def test_browser_rating_statistics_override_only_request_user_columns():
+    features = fitted()
+    statistics = RatingStatistics(mean_rating=3.5, rating_count=0, days_inactive=2.25, complete=True)
+    out = features.build(["a"], [1, 2], user_id="u1", rating_statistics=statistics)
+    col = lambda name: out[:, COLUMN[name]]
+    assert col("user_mean_rating") == pytest.approx([3.5, 3.5])
+    assert col("user_log_rating_count") == pytest.approx([0, 0])
+    assert col("user_days_inactive") == pytest.approx([2.25, 2.25])
+    assert col("genre_match") == pytest.approx([1, .5])
+
+
+def test_mixed_browser_profile_keeps_user_statistics_missing():
+    features = fitted()
+    statistics = RatingStatistics(complete=False)
+    out = features.build(["a"], [1], user_id="u1", rating_statistics=statistics)
+    assert np.isnan(out[:, [COLUMN["user_mean_rating"], COLUMN["user_log_rating_count"], COLUMN["user_days_inactive"]]]).all()
 
 
 def test_rejects_interactions_at_or_after_cutoff():

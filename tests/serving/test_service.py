@@ -7,6 +7,7 @@ from trustworthy_recsys.serving.components import FixtureRetrieval, PassThroughR
 from trustworthy_recsys.serving.contracts import CandidateBatch, ComponentInfo, RankingResult, ScoredMovie
 from trustworthy_recsys.serving.service import ComponentOutputError, RecommendationService
 from trustworthy_recsys.serving.contracts import RecommendationRequest
+from datetime import datetime, timezone
 
 
 def payload(**preferences):
@@ -68,3 +69,52 @@ def test_reranker_receives_full_configured_candidate_budget():
     request = RecommendationRequest.model_validate(payload())  # result_count=6
     RecommendationService(catalog, retrieval, PassThroughReranker(), "fixture", candidate_budget=500).recommend(request)
     assert retrieval.limits == [500]
+
+
+class RecordsQueryAndCandidates:
+    info = ComponentInfo(name="records-query", version="1", mode="external")
+
+    def __init__(self):
+        self.query = None
+
+    def retrieve(self, query, limit):
+        self.query = query
+        return CandidateBatch(
+            candidates=[ScoredMovie(movie_id=movie_id, score=.5) for movie_id in ["101", "102", "103"]],
+            component=self.info,
+        )
+
+
+def test_ratings_drive_query_statistics_history_and_all_rated_exclusions():
+    retrieval = RecordsQueryAndCandidates()
+    request = RecommendationRequest.model_validate(payload(
+        history_items=[],
+        ratings=[
+            {"movie_id": "101", "rating": 5, "rated_at": "2026-11-15T12:00:00Z"},
+            {"movie_id": "102", "rating": 2.5, "rated_at": "2026-11-16T12:00:00Z"},
+        ],
+    ))
+    fixed_now = lambda: datetime(2026, 11, 17, 12, tzinfo=timezone.utc)
+    response = RecommendationService(
+        fixture_catalog(), retrieval, PassThroughReranker(), "fixture", clock=fixed_now
+    ).recommend(request)
+    assert retrieval.query.history_items == ["101"]
+    assert retrieval.query.rating_statistics.mean_rating == pytest.approx(3.75)
+    assert retrieval.query.rating_statistics.rating_count == 2
+    assert retrieval.query.rating_statistics.days_inactive == pytest.approx(1)
+    assert [item.movie.movie_id for item in response.recommendations] == ["103"]
+
+
+def test_temporary_title_context_reaches_models_without_mutating_preferences():
+    retrieval = RecordsQueryAndCandidates()
+    request = RecommendationRequest.model_validate({
+        **payload(history_items=[], ratings=[]),
+        "temporary_history_items": ["102"],
+    })
+    response = RecommendationService(
+        fixture_catalog(), retrieval, PassThroughReranker(), "fixture"
+    ).recommend(request)
+    assert retrieval.query.history_items == ["102"]
+    assert response.applied_preferences == request.preferences
+    assert response.applied_preferences.history_items == []
+    assert [item.movie.movie_id for item in response.recommendations] == ["101", "103"]

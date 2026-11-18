@@ -364,6 +364,20 @@ export interface components {
             include_genres?: string[];
             /** Exclude Genres */
             exclude_genres?: string[];
+            /** Ratings */
+            ratings?: components["schemas"]["RatingRecord"][] | null;
+        };
+        /** RatingRecord */
+        RatingRecord: {
+            /** Movie Id */
+            movie_id: string;
+            /** Rating */
+            rating: number;
+            /**
+             * Rated At
+             * Format: date-time
+             */
+            rated_at: string;
         };
         /** RecommendationItem */
         RecommendationItem: {
@@ -391,6 +405,8 @@ export interface components {
             known_user_id?: string | null;
             /** Assignment Key */
             assignment_key?: string | null;
+            /** Temporary History Items */
+            temporary_history_items?: string[];
         };
         /** RecommendationResponse */
         RecommendationResponse: {

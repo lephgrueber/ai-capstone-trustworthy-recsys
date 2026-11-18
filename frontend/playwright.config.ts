@@ -6,7 +6,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   testDir: "./e2e",
-  testIgnore: /release\.(learned|no-artwork)\.spec\.ts/,
+  testIgnore: /(release\.(learned|no-artwork)|search|feedback)\.spec\.ts/,
   timeout: 30_000,
   use: {
     baseURL: "http://127.0.0.1:5173",

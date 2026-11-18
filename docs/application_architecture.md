@@ -4,8 +4,9 @@
 flowchart LR
     U[Visitor] --> F[React / Vite frontend]
 
-    F -->|preferences| API[FastAPI input validation]
-    API --> RET[Two-tower retrieval via Weaviate]
+    F -->|versioned local rating profile + preferences| API[FastAPI input validation]
+    API --> PROF[Authoritative history, exclusions and rating statistics]
+    PROF --> RET[Two-tower retrieval via Weaviate]
     RET --> FIL[Hard candidate filtering]
     FIL --> RANK[LambdaRank or pass-through reranker]
     RANK --> VAL[Final output validation]
@@ -36,13 +37,13 @@ flowchart LR
 
 ## Components and data flow
 
-The browser sends explicit favorites, hidden titles, genre constraints, and a requested result count to FastAPI. After request validation, learned serving retrieves a bounded candidate pool with the saved two-tower model and Weaviate. Hard filters remove disallowed candidates before the saved LambdaRank model reranks them. A pass-through reranker is used when LambdaRank is not configured. Final validation rejects results outside the retrieved-and-filtered candidate set or results that violate the submitted constraints.
+The browser restores its versioned local profile before its first request and sends numeric rating records, actual timestamps, unresolved legacy favorites, visit-only hidden titles, genre constraints, and a requested result count to FastAPI. Hidden IDs use the ordinary exclusion field for the current page visit, can be individually removed in Preferences, and are not stored in the browser profile. The backend derives authoritative statistics and positive history from the validated request state. Ratings at least 4.0 feed positive history; every rated movie is removed before reranking and checked again after it. LambdaRank receives the request-scoped mean rating, `log1p` count, and live inactivity values without changing cached training statistics or the saved feature order. Missing values remain missing. See [browser rating profile and live model features](browser_rating_profile.md).
 
-Text or browser-provided speech transcripts take a separate path. The `/api/v1/refinements` endpoint uses the deterministic, bounded catalog interpreter to return revised preferences. The frontend then submits those preferences in a separate recommendation request. This path does not use an LLM. See [natural-language and voice search](natural_language_search.md).
+The main search area separates explicit movie lookup/rating from recommendation requests. Both modes accept typed input or optional browser-provided speech: title speech fills catalog search without selecting or rating a movie, and recommendation speech fills an editable request that still requires submission. The `/api/v1/refinements` endpoint uses the deterministic, bounded catalog interpreter to revise genres or resolve an exact “movies like” title. Resolved titles travel as request-scoped `temporary_history_items`: they reach retrieval and reranking without mutating the saved rating profile or favorites, and remain excluded from displayed results. This path does not use an LLM. See [movie and genre search](natural_language_search.md).
 
 Artwork is optional enrichment. The frontend sends movie IDs to the backend artwork endpoint, which obtains TMDb metadata and returns sanitized image URLs and display metadata. The browser then downloads images separately from TMDb's image service. Neither path changes candidate retrieval, filtering, or ranking.
 
-When feedback collection is enabled, recommendation serving records the randomized or observed decision before returning its capability to the browser. Browser interaction events then pass through the feedback API before reaching the same local SQLite store. Exported movie-feedback data support the separate movie-feedback OPE workflow. Open Bandit OPE uses its own dataset and pipeline; neither offline workflow automatically changes live inference.
+When feedback collection is enabled, recommendation serving records the randomized or observed decision, including the effective rating and temporary title context in versioned decision schema 3, before returning its capability to the browser. Personal rating changes are not exposure or reward events. Featured interactions still pass through the feedback API with their original decision/token and unchanged propensity/reward rules. Exported movie-feedback data support the separate movie-feedback OPE workflow.
 
 ## Operational references
 

@@ -163,7 +163,7 @@ class RankingFeatures:
         known = dict.fromkeys(self.item_map[item] for item in history_items if item in self.item_map)
         return np.fromiter(known, dtype=np.int64, count=len(known))
 
-    def build(self, history_items, candidates, retrieval_scores=None, user_id=None) -> np.ndarray:
+    def build(self, history_items, candidates, retrieval_scores=None, user_id=None, rating_statistics=None) -> np.ndarray:
         """Return a float32 [len(candidates), len(FEATURE_NAMES)] matrix.
 
         `candidates` are catalog row indices in retrieval order; `retrieval_scores`
@@ -184,6 +184,15 @@ class RankingFeatures:
         row = self.user_map.get(user_id) if user_id is not None else None
         if row is not None:
             out[:, 10:13] = self.user_columns[row]
+        if rating_statistics is not None:
+            # A supplied browser profile overrides only request-scoped user statistics.
+            # None remains NaN; a genuine count of zero remains log1p(0) == 0.
+            values = (
+                rating_statistics.mean_rating,
+                None if rating_statistics.rating_count is None else np.log1p(rating_statistics.rating_count),
+                rating_statistics.days_inactive,
+            )
+            out[:, 10:13] = [np.nan if value is None else value for value in values]
         if not len(history):
             return out
 

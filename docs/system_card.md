@@ -2,11 +2,11 @@
 
 **Status:** Local release candidate tested with two-tower retrieval and LambdaRank
 
-**Last updated:** November 15, 2026
+**Last updated:** November 17, 2026
 
 ## Overview and intended use
 
-The application lets visitors explore movie recommendations without creating an account. Visitors select favorite movies, include or avoid genres, and hide individual titles.
+The application lets visitors explore movie recommendations without creating an account. Visitors search by title/year, explicitly submit 0.5–5-star ratings, review/edit/remove browser-local ratings, include or avoid genres, and hide individual titles.
 
 It is a local course prototype for movie discovery and integration testing, not a production service.
 
@@ -22,13 +22,13 @@ React/Vite → FastAPI → two-tower/Weaviate retrieval
 → final validation → recommendations with MovieLens metadata → UI
 ```
 
-The browser sends the current preferences with each recommendation request. Favorite movies guide retrieval; genre selections and hidden titles constrain the results. In learned mode, an empty history uses popularity calculated from the training data.
+The browser restores a versioned local rating profile before the first request and sends it with each recommendation request. Ratings at least 4.0 guide retrieval; every rated movie, genre constraints, and independently hidden titles constrain displayed results. Hide is a reversible, visit-only exclusion rather than a rating: hidden IDs are managed under **Hidden this visit** and clear on full reload. Actual legacy favorites remain undated positive preferences. In learned mode, an empty history uses popularity calculated from the training data.
 
-Setting `TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR` enables the saved LightGBM LambdaRank model. With a candidate limit of 500, it reorders the retrieved movies that pass the hard filters. Its features include popularity, rating, release year, user activity, and user–movie features such as co-likes with the submitted favorites. Without LambdaRank, the app keeps retrieval order.
+Setting `TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR` enables the saved LightGBM LambdaRank model. For a complete browser profile it receives mean across all current numeric ratings, `log1p` current rating count, and days since the latest rating of any value. These override only the current request's three user columns; saved item statistics, cutoff, feature order, weights, and model stay unchanged. Without LambdaRank, the app keeps retrieval order.
 
 In the reported offline comparison, LambdaRank increased test NDCG@10 from 0.1057 to 0.1204 and Recall@10 from 0.0486 to 0.0657. See the [ranking report](ranking_report.md) for the evaluation details.
 
-The search bar supports a limited set of English requests about genres and exact movie titles. Optional browser speech recognition fills the search field for editing before submission. See [text and voice search](natural_language_search.md).
+The main search area exposes separate catalog-title rating and bounded recommendation-request modes. Optional browser speech recognition fills the editable field in either mode: a spoken title starts catalog suggestions but still requires explicit movie selection and rating save, while a spoken recommendation request still requires explicit submission. Genre requests revise genre constraints. “Movies like” requests use an exact resolved title as temporary request context without creating a favorite, rating, or rating timestamp. See [movie and genre search](natural_language_search.md).
 
 MovieLens supplies movie IDs, titles, and genres. The frontend requests optional TMDb posters and backdrops separately, so recommendations can appear before the images finish loading.
 
@@ -36,11 +36,11 @@ MovieLens supplies movie IDs, titles, and genres. The frontend requests optional
 
 A random session identifier is stored in `sessionStorage`. When feedback is enabled, the browser also keeps server-issued decision tokens and pending events for that tab so failed submissions can be retried.
 
-Preferences, results, and undo history remain in React memory. With feedback enabled, the backend separately saves the preferences submitted with the request and a keyed hash of the session identifier (HMAC) in local SQLite. That database is used for the feedback experiment; it does not create user accounts.
+Numeric ratings and their latest genuine-change UTC timestamps are stored in browser `localStorage`; cached movie labels are display metadata. Visit-only hidden exclusions, results, and undo history remain in React memory. Storage failures are surfaced; a failed rating write leaves the dialog and unsaved draft available and does not create a session-only rating profile. There is no account or cross-device synchronization. With feedback enabled, the backend separately saves request context and a keyed session hash in local SQLite for the featured-slot experiment.
 
 At INFO level, startup logs show the backend, retrieval and reranker versions, candidate limit, and whether artwork is configured. Request logs include the request ID, method, path, status, duration, and backend. Recommendation logs also record component versions, result count, whether results are partial, and total processing time. Startup failures and handled component or storage errors are logged separately.
 
-Detailed retrieval, filtering, and reranking timings, along with response warnings, are available in API responses and saved workload results rather than normal application logs. These records help identify which request failed and which configuration was running. Normal application logs exclude credentials, raw histories, and submitted preference text. Log-retention and access rules for a public deployment have not been defined.
+Detailed retrieval, filtering, and reranking timings and response warnings are available in API responses rather than normal application logs. The preserved workload samples retain timings and errors but do not retain per-response warning arrays. These records help identify which request failed and which configuration was running. Normal application logs exclude credentials, raw histories, and submitted preference text. Log-retention and access rules for a public deployment have not been defined.
 
 Browser speech recognition may send audio to its provider. The application receives the submitted transcript, not recorded audio. The microphone only starts after an explicit click.
 
@@ -48,7 +48,7 @@ The TMDb token stays on the backend. Artwork metadata requests send mapped movie
 
 ## Safeguards and recovery
 
-The API rejects unknown or duplicate movie IDs, conflicting preferences, and inputs outside the defined limits. Hard filters remove favorite movies, hidden titles, and candidates that fail genre constraints. Final validation checks that returned movies are valid and that the reranker has not added movies outside the supplied candidate list.
+The API rejects unknown/duplicate IDs, non-finite or non-half-star ratings, non-UTC or materially future timestamps, ambiguous known-user/browser identity, conflicting preferences, and inputs outside explicit limits. Hard filters remove every rated movie, hidden titles, and genre violations before reranking. Final validation reapplies these constraints.
 
 If an update fails, the app keeps the earlier results and pending edits. Visitors can retry or reset their preferences. Request-sequence and revision checks prevent an older response from replacing newer results.
 
@@ -66,7 +66,7 @@ Startup checks confirm that the model files and Weaviate collection are compatib
 
 The retrieval evaluation reports higher Recall@100 than matched-policy popularity, with frequent popularity fallback in the offline test population. Results cover one split and seed. The [retrieval report](retrieval_report.md) and [Retrieval Model Card](model_card_retrieval.md) provide the metrics and methodology.
 
-Application tests passed for validation, filtering, preference handling, and recovery. Some unit and API tests use mocks. The November 9 M4 browser check used the saved two-tower model, a live Weaviate collection, and the saved LambdaRank model. It covered favorites, a hidden title, genre constraints, and text refinement without mocking recommendation responses. Live TMDb artwork worked with a backend token, and the same learned flow passed without the token using neutral artwork.
+Application tests passed for validation, filtering, persistence, automatic updates, stale-response handling, and recovery. On November 17 the opt-in integration check used the saved two-tower model, live `MovieLensTwoTower80M4Release84366c2` collection, and saved LambdaRank model. A request with 5.0, 3.0, and 2.5 ratings reached the matrix as mean `3.5`, `log1p(3)`, and `1.0` inactive day; only the 5.0 item supplied positive history and all three rated IDs were absent from displayed results. The learned Chromium flow passed with real TMDb artwork and controlled Retry. This verifies plumbing, not improved recommendation quality.
 
 The [M4 release report](m4_release_check_20261109.md) records request IDs, p50/p99 HTTP and component timings, a five-request concurrency check, browser and artwork results, logs, and cost assumptions. Feedback collection was off during these measurements. These checks test application behavior and local latency, not recommendation quality or performance under sustained load.
 
@@ -76,7 +76,7 @@ The regular browser artwork tests use mocked responses; the selected release tes
 
 | Case | Result | Handling or limitation |
 |---|---|---|
-| Favorites, a hidden title, and genre constraints | Passed in the learned browser flow with the saved models and live Weaviate. | Hard filters and final validation enforce the constraints. This checks behavior, not recommendation quality. |
+| Numeric ratings and genre constraints | Passed in the learned browser flow with saved models and live Weaviate. | The submitted profile reached LambdaRank and every rated item remained excluded. This checks behavior, not recommendation quality. |
 | Simulated HTTP 503 followed by Retry | Retry succeeded. | The app keeps earlier results and edits so the user can retry. Recovery after a real Weaviate outage has not been tested. |
 | TMDb token disabled | Recommendations worked with neutral artwork. | Artwork is optional. This does not cover every possible provider failure. |
 | Malformed local `links.parquet` | Code review identified a possible startup failure. This case was not tested. | Handling malformed local metadata remains an open startup risk. |
@@ -97,12 +97,12 @@ Follow the [README](../README.md) for commands and the [model setup guide](team_
 - [ ] Obtain a compatible MovieLens data run and extract the saved model bundle. No model retraining is required.
 - [ ] Start Weaviate and use a compatible publication. Use fresh output directories and collection names when publishing saved embeddings.
 - [ ] Configure learned retrieval and the saved LambdaRank model, set `TRUSTWORTHY_RECSYS_FEEDBACK_MODE=off` for measurements, and start the API and frontend.
-- [ ] Check `/ready` and `/api/v1/application/status`. Submit favorites `1`, `260`, and `1196`; confirm `two-tower-weaviate`, `lambdarank`, and no popularity-fallback warning.
+- [ ] Check `/ready` and `/api/v1/application/status`. Submit at least one rating of 4.0 or more; confirm `two-tower-weaviate`, `lambdarank`, the rating request, and no rated item in results.
 - [ ] Run the documented application checks and learned HTTP workload. Save new measurements separately from existing results. The recorded workloads used 10 warm-ups and 100 measured requests each.
 
 ## Residual risks and testing gaps
 
-- **Limited personalization:** Favorites and structured controls capture basic preferences, not ratings, viewing chronology, or detailed intent. Exclusions filter results; they do not train the model to recognize dislikes.
+- **Limited personalization:** Ratings alter the saved model's existing positive-history and three user-statistic inputs. Low ratings exclude items but do not create dislike embeddings or retrain either model.
 - **Candidate coverage:** Filters can leave too few matching movies in the retrieved pool. The app returns partial results rather than relaxing the visitor’s constraints.
 - **Data limitations:** MovieLens coverage and historical popularity can affect recommendations. The available data do not support conclusions about demographic fairness.
 - **Untested interactions and failures:** Physical microphone capture and recovery from a real Weaviate outage remain untested.
@@ -111,6 +111,8 @@ Follow the [README](../README.md) for commands and the [model setup guide](team_
 ## Movie feedback experiment
 
 Feedback collection supports `off`, `observe`, and `randomized` modes. In randomized mode, the app chooses one featured movie from a recorded candidate pool, keeps the ordinary grid fixed, and excludes duplicates. The server saves the decision before returning the response. Feedback events are tied to a server-issued decision and token, and retries are deduplicated.
+
+Decision schema version 3 retains the effective rating and temporary title context. Catalog search, profile hydration, and star-rating saves do not create synthetic exposures or rewards and are not translated into historical `favorite_add` or `hide` events. Existing propensity calculations, assignment keys, observation windows, and reward definitions are unchanged.
 
 The page displays a collection notice, and About explains which preferences and interaction events are stored. Raw databases and exports are ignored by Git and should not be committed to the repository.
 

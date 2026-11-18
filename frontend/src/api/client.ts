@@ -3,11 +3,13 @@ import type { components } from "./schema";
 type GeneratedMovie = components["schemas"]["CatalogMovie"];
 type GeneratedPreferences = components["schemas"]["PreferenceState"];
 export type CatalogMovie = Omit<GeneratedMovie, "genres" | "poster_url"> & { genres: string[]; poster_url: string | null };
-export type PreferenceState = Omit<GeneratedPreferences, "history_items" | "excluded_movie_ids" | "include_genres" | "exclude_genres"> & {
+export type RatingRecord = components["schemas"]["RatingRecord"];
+export type PreferenceState = Omit<GeneratedPreferences, "history_items" | "excluded_movie_ids" | "include_genres" | "exclude_genres" | "ratings"> & {
   history_items: string[];
   excluded_movie_ids: string[];
   include_genres: string[];
   exclude_genres: string[];
+  ratings?: RatingRecord[] | null;
 };
 export type RecommendationRequest = components["schemas"]["RecommendationRequest"];
 type GeneratedResponse = components["schemas"]["RecommendationResponse"];

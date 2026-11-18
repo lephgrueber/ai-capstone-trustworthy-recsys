@@ -279,6 +279,15 @@ Open `http://127.0.0.1:5173`. The UI labels synthetic fixture content and the
 pass-through reranker. Missing movie posters are expected in fixture mode.
 Stop either development server with Ctrl+C in its terminal.
 
+The primary browser workflow is movie search → choose the exact title/year →
+explicitly submit **Your rating** (0.5–5 in half-star steps). The **Your ratings**
+area supports edit, remove, and a separate clear action. Ratings are restored from
+this browser before the first recommendation request and every effective change
+refreshes automatically while retaining the prior results. Search, selection, and
+details views never save feedback. See [browser rating profile and live model
+features](docs/browser_rating_profile.md) for storage, timestamp, compatibility,
+and missing-value rules.
+
 ### Verify the backend you intend to start
 
 In PowerShell:
@@ -505,6 +514,20 @@ npm test
 npm run typecheck
 npm run build
 cd ..
+```
+
+The opt-in saved-model rating check requires the prepared artifacts and compatible
+local Weaviate collection. It executes real two-tower retrieval and LambdaRank and
+asserts the three live user features and rated-item exclusions:
+
+```bash
+LEARNED_RATING_INTEGRATION=1 \
+TRUSTWORTHY_RECSYS_BACKEND=learned \
+TRUSTWORTHY_RECSYS_RUN_DIR=data/processed/m3_ratio_80_10_10_20261002 \
+TRUSTWORTHY_RECSYS_RETRIEVAL_INPUTS_DIR=data/downloads/two_tower_80_v1/inputs \
+TRUSTWORTHY_RECSYS_RETRIEVAL_MODEL_DIR=artifacts/retrieval/m4_bundle_weaviate_84366c2 \
+TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR=artifacts/ranking/lambdarank_v1 \
+.venv/bin/python -m pytest -q -s tests/serving/test_learned_rating_integration.py
 ```
 
 #### Browser tests

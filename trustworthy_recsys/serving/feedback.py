@@ -90,7 +90,8 @@ class FeedbackStore:
             return response
         session = self.signature('session:'+request.session_id)
         key = request.assignment_key or str(uuid.uuid4())
-        request_hash = digest({'request': request.model_dump(exclude={'session_id', 'assignment_key'}),
+        request_context = request.model_dump(mode='json', exclude={'session_id', 'assignment_key'})
+        request_hash = digest({'request': request_context,
                                'provenance': self.provenance, 'mode': self.mode, 'epsilon': self.epsilon,
                                'backend': response.backend_mode, 'synthetic': self.synthetic})
         with self.connect() as db:
@@ -112,8 +113,8 @@ class FeedbackStore:
             candidates = [{'movie_id': item.movie.movie_id, 'retrieval_score': item.retrieval_score,
                            'ranking_score': item.ranking_score} for item in pool]
             decision_id, assigned = str(uuid.uuid4()), self.clock()
-            payload = {'schema_version': 1, 'decision_id': decision_id, 'assigned': assigned,
-                'session': session, 'context': request.model_dump(exclude={'session_id', 'assignment_key'}),
+            payload = {'schema_version': 3, 'decision_id': decision_id, 'assigned': assigned,
+                'session': session, 'context': request_context,
                 'backend': response.backend_mode, 'synthetic': self.synthetic or response.backend_mode == 'fixture',
                 'provenance': self.provenance, 'policy': POLICY if epsilon else 'deterministic_observation_v1',
                 'epsilon': epsilon, 'candidate_hash': digest(candidates), 'candidates': candidates,
