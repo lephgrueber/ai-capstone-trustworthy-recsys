@@ -1,131 +1,152 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { expect, test, type Page } from "@playwright/test";
+import { resolve } from "node:path";
+import { expect, test } from "@playwright/test";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const uniqueRun = `${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
-const evidenceDir = resolve(
-  process.cwd(),
-  process.env.M4_RELEASE_EVIDENCE_DIR ?? `../tmp/m4_release_evidence/${uniqueRun}`
-);
-const evidenceFile = resolve(evidenceDir, "browser-flow-artwork.json");
+const evidenceFile = resolve(process.cwd(), process.env.M4_RELEASE_EVIDENCE_DIR ?? "../tmp/rating_profile_verification_20261117", "browser-flow-artwork.json");
+const containerEvidenceDir = process.env.M4_CONTAINER_EVIDENCE_DIR;
 
-if (existsSync(evidenceFile)) {
-  throw new Error(`Refusing to replace existing browser evidence: ${evidenceFile}`);
-}
-
-async function chooseGenre(page: Page, kind: "Include" | "Avoid", value: string) {
-  const drawer = page.getByRole("dialog", { name: "Personalize your recommendations" });
-  await drawer.getByRole("button", { name: new RegExp(`${kind} genres`) }).click();
-  const selector = page.getByRole("dialog", { name: `${kind} genres` });
-  await selector.getByRole("button", { name: value }).click();
-  await selector.getByRole("button", { name: "Done" }).click();
-}
-
-test("real learned flow uses LambdaRank, filters, search, hides and live TMDb artwork", async ({ page, request }) => {
-  const statusResponse = await request.get("/api/v1/application/status");
-  expect(statusResponse.ok(), "release-artwork requires a ready application status endpoint").toBe(true);
-  const status = await statusResponse.json();
-  expect(status.backend_mode, "release-artwork requires the learned backend").toBe("learned");
-  expect(status.posters_configured, "release-artwork requires backend TMDb artwork configuration").toBe(true);
+test("real learned browser flow submits ratings to two-tower and LambdaRank", async ({ page, request }) => {
+  const status = await (await request.get("/api/v1/application/status")).json();
+  expect(status.backend_mode).toBe("learned");
+  expect(status.posters_configured).toBe(true);
+  await page.addInitScript(() => localStorage.clear());
 
   const initialResponse = page.waitForResponse((response) => response.url().endsWith("/recommendations") && response.ok());
   await page.goto("/");
   const initial = await (await initialResponse).json();
-  expect(initial.backend_mode).toBe("learned");
   expect(initial.retrieval.name).toBe("two-tower-weaviate");
   expect(initial.reranker.name).toBe("lambdarank");
-  await expect(page.locator(".feature-hero h1")).toBeVisible();
   await expect(page.locator('img[src^="https://image.tmdb.org/"]').first()).toBeVisible({ timeout: 15_000 });
 
-  await page.locator(".portrait-card").first().getByRole("button", { name: "Hide this movie" }).click();
-  await page.getByRole("button", { name: /Personalize/ }).click();
-  const drawer = page.getByRole("dialog", { name: "Personalize your recommendations" });
-  const favorites = drawer.getByLabel("Movies you like");
-  await favorites.fill("Toy Story (1995)");
-  await drawer.getByRole("button", { name: /Toy Story \(1995\).*Add/ }).click();
-  await chooseGenre(page, "Include", "Adventure");
-  await chooseGenre(page, "Avoid", "Horror");
-
-  const submittedRequest = page.waitForRequest((request) => request.url().endsWith("/recommendations") && request.method() === "POST");
+  const search = page.getByRole("search", { name: "Rate a movie" });
+  await search.getByRole("combobox").fill("Toy Story");
+  await page.getByLabel("Movie search results").getByRole("button", { name: /Toy Story \(1995\)/ }).first().click();
+  const editor = page.getByRole("dialog", { name: /Rate Toy Story/ });
+  await editor.getByLabel("Your rating").selectOption("4.5");
+  const submittedRequest = page.waitForRequest((candidate) => candidate.url().endsWith("/recommendations") &&
+    candidate.postDataJSON().preferences.ratings?.[0]?.rating === 4.5);
   const learnedResponse = page.waitForResponse((response) => response.url().endsWith("/recommendations") && response.ok());
-  await drawer.getByRole("button", { name: "Update recommendations" }).click();
+  const started = Date.now();
+  await editor.getByRole("button", { name: "Save rating" }).click();
   const submitted = (await submittedRequest).postDataJSON();
   const learned = await (await learnedResponse).json();
-  expect(submitted.preferences.history_items).toContain("1");
-  expect(submitted.preferences.excluded_movie_ids.length).toBeGreaterThan(0);
-  const hiddenMovieId = submitted.preferences.excluded_movie_ids[0];
-  expect(submitted.preferences.include_genres).toContain("Adventure");
-  expect(submitted.preferences.exclude_genres).toContain("Horror");
-  expect(learned.retrieval.mode).toBe("learned");
+  expect(submitted.known_user_id).toBeNull();
+  expect(submitted.preferences.ratings[0]).toMatchObject({ movie_id: "1", rating: 4.5 });
+  expect(learned.retrieval.name).toBe("two-tower-weaviate");
   expect(learned.reranker.name).toBe("lambdarank");
-  expect(learned.warnings).not.toContain("Popularity fallback used because no supported history items were supplied.");
-  expect(learned.recommendations.every((item: { movie: { genres: string[]; movie_id: string } }) =>
-    item.movie.genres.includes("Adventure") &&
-    !item.movie.genres.includes("Horror") &&
-    item.movie.movie_id !== hiddenMovieId)).toBe(true);
-  await expect(page.getByRole("heading", { name: "Your recommendations", level: 2 })).toBeVisible();
+  expect(learned.recommendations.every((item: { movie: { movie_id: string } }) => item.movie.movie_id !== "1")).toBe(true);
+  await expect(editor).toBeHidden();
 
-  const search = page.getByRole("search", { name: "Search movie recommendations" });
-  const browserStarted = Date.now();
-  const searchResponse = page.waitForResponse((response) => response.url().endsWith("/recommendations") && response.ok());
-  await search.getByRole("textbox").fill("show comedy without thriller");
-  await search.getByRole("textbox").press("Enter");
-  const searched = await (await searchResponse).json();
-  await expect(page.getByText("Including Comedy; Avoiding Thriller.")).toBeVisible();
-  const browserCompleted = Date.now();
-  expect(searched.retrieval.mode).toBe("learned");
-  expect(searched.reranker.name).toBe("lambdarank");
-  expect(searched.applied_preferences.include_genres).toEqual(expect.arrayContaining(["Adventure", "Comedy"]));
-  expect(searched.applied_preferences.exclude_genres).toEqual(expect.arrayContaining(["Horror", "Thriller"]));
-  const included = new Set<string>(searched.applied_preferences.include_genres);
-  const excluded = new Set<string>(searched.applied_preferences.exclude_genres);
-  expect(searched.recommendations.every((item: { movie: { genres: string[] } }) =>
-    item.movie.genres.some((genre) => included.has(genre)) &&
-    item.movie.genres.every((genre) => !excluded.has(genre)))).toBe(true);
+  await page.getByRole("button", { name: "Preferences" }).click();
+  const preferences = page.getByRole("dialog", { name: "Recommendation preferences" });
+  await preferences.getByRole("button", { name: "Include genres" }).click();
+  const genreDialog = page.getByRole("dialog", { name: "Include genres" });
+  const genreRequest = page.waitForRequest((candidate) => candidate.url().endsWith("/recommendations") &&
+    candidate.postDataJSON().preferences.include_genres.includes("Adventure"));
+  await genreDialog.getByRole("button", { name: "Adventure" }).click();
+  expect((await genreRequest).postDataJSON().preferences.ratings[0].rating).toBe(4.5);
+  await expect(genreDialog).toBeVisible();
 
-  const artworkResources = await page.evaluate(() => performance.getEntriesByType("resource")
-    .filter((entry) => entry.name.startsWith("https://image.tmdb.org/"))
-    .map((entry) => ({ name: entry.name, startTime: entry.startTime, duration: entry.duration })));
-  mkdirSync(evidenceDir, { recursive: true });
-  writeFileSync(evidenceFile, JSON.stringify({
-    text_entry_submission_to_response_and_summary_ms: browserCompleted - browserStarted,
-    timing_boundary: "Before search-field fill through recommendation response receipt and updated preference-summary visibility in Chromium; excludes completion of all result cards and artwork.",
-    artwork_enabled: true,
-    artwork_resource_count: artworkResources.length,
-    artwork_resources: artworkResources,
-    final_request_id: searched.request_id,
-    retrieval: searched.retrieval,
-    reranker: searched.reranker,
-  }, null, 2) + "\n", { flag: "wx" });
+  if (!existsSync(evidenceFile)) {
+    mkdirSync(resolve(evidenceFile, ".."), { recursive: true });
+    writeFileSync(evidenceFile, JSON.stringify({
+      verification: "candidate working tree against saved learned artifacts",
+      elapsed_rating_submission_to_response_ms: Date.now() - started,
+      request: submitted,
+      retrieval: learned.retrieval,
+      reranker: learned.reranker,
+      rated_item_excluded: true,
+      artwork_enabled: true,
+    }, null, 2) + "\n", { flag: "wx" });
+  }
 });
 
-test("one controlled recommendation failure recovers through Retry", async ({ page, request }) => {
-  const statusResponse = await request.get("/api/v1/application/status");
-  expect(statusResponse.ok(), "release-artwork requires a ready application status endpoint").toBe(true);
-  const status = await statusResponse.json();
-  expect(status.backend_mode, "release-artwork requires the learned backend").toBe("learned");
-  expect(status.posters_configured, "release-artwork requires backend TMDb artwork configuration").toBe(true);
-
-  let failed = false;
+test("one controlled recommendation failure preserves a saved rating and retries", async ({ page, request }) => {
+  expect((await (await request.get("/api/v1/application/status")).json()).backend_mode).toBe("learned");
+  let recommendationCount = 0;
   await page.route("**/api/v1/recommendations", async (route) => {
-    if (!failed) {
-      failed = true;
-      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({
-        error: { code: "controlled_release_check", message: "Controlled release-check failure." },
-      }) });
-      return;
-    }
-    await route.continue();
+    recommendationCount += 1;
+    if (recommendationCount === 2) {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { code: "controlled_release_check", message: "Controlled release-check failure." } }) });
+    } else await route.continue();
   });
+  await page.addInitScript(() => localStorage.clear());
   await page.goto("/");
-  await expect(page.getByRole("alert")).toContainText("Controlled release-check failure.");
+  const search = page.getByRole("search", { name: "Rate a movie" });
+  await search.getByRole("combobox").fill("Toy Story");
+  await page.getByLabel("Movie search results").getByRole("button", { name: /Toy Story \(1995\)/ }).first().click();
+  const editor = page.getByRole("dialog", { name: /Rate Toy Story/ });
+  await editor.getByLabel("Your rating").selectOption("3.5");
+  await editor.getByRole("button", { name: "Save rating" }).click();
+  await expect(editor).toBeHidden();
+  const notice = page.locator(".rating-notice");
+  await expect(notice).toContainText("Recommendations couldn’t update.");
   const recovery = page.waitForResponse((response) => response.url().endsWith("/recommendations") && response.ok());
-  await page.getByRole("button", { name: "Retry" }).click();
+  await notice.getByRole("button", { name: "Retry" }).click();
   const recovered = await (await recovery).json();
-  expect(recovered.backend_mode).toBe("learned");
   expect(recovered.reranker.name).toBe("lambdarank");
-  await expect(page.locator(".feature-hero h1")).toBeVisible();
+  expect(recovered.applied_preferences.ratings[0].rating).toBe(3.5);
 });
 
+test("title-only recommendation failure exposes main-page Retry with durable state unchanged", async ({ page, request }) => {
+  expect((await (await request.get("/api/v1/application/status")).json()).backend_mode).toBe("learned");
+  let failTitleRecommendation = true;
+  await page.route("**/api/v1/recommendations", async (route) => {
+    const body = route.request().postDataJSON();
+    if (failTitleRecommendation && body.temporary_history_items?.includes("2571")) {
+      failTitleRecommendation = false;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({
+        error: { code: "controlled_title_refresh", message: "Controlled title refresh failure." },
+      }) });
+    } else await route.continue();
+  });
+  await page.addInitScript(() => localStorage.clear());
+  const initialResponse = page.waitForResponse((response) => response.url().endsWith("/recommendations") && response.ok());
+  await page.goto("/");
+  await initialResponse;
+  const durableBefore = await page.evaluate(() => localStorage.getItem("trustworthy-recsys-browser-profile-v1"));
+
+  await page.getByRole("tab", { name: "Find recommendations" }).click();
+  await page.getByRole("textbox", { name: "Describe the movies you want" }).fill("movies like The Matrix");
+  const failedRequest = page.waitForRequest((candidate) => candidate.url().endsWith("/recommendations") &&
+    candidate.postDataJSON().temporary_history_items?.includes("2571"));
+  await page.getByRole("button", { name: "Find recommendations", exact: true }).click();
+  expect((await failedRequest).postDataJSON()).toMatchObject({
+    preference_revision: 1,
+    temporary_history_items: ["2571"],
+    preferences: { ratings: [], history_items: [] },
+  });
+
+  const alert = page.locator(".personalization-summary").getByRole("alert");
+  await expect(alert).toContainText("Controlled title refresh failure.");
+  await expect(page.locator(".recommendation-section article").first()).toBeVisible();
+  const retry = page.locator(".personalization-summary").getByRole("button", { name: "Retry" });
+  await expect(retry).toBeVisible();
+  if (containerEvidenceDir) {
+    mkdirSync(containerEvidenceDir, { recursive: true });
+    await page.screenshot({ path: resolve(containerEvidenceDir, "title-only-failure-main-page.png"), fullPage: true });
+  }
+  const retryRequest = page.waitForRequest((candidate) => candidate.url().endsWith("/recommendations") &&
+    candidate.postDataJSON().temporary_history_items?.includes("2571"));
+  const retryResponse = page.waitForResponse((response) => response.url().endsWith("/recommendations") && response.ok());
+  await retry.click();
+  expect((await retryRequest).postDataJSON()).toMatchObject({ preference_revision: 1, temporary_history_items: ["2571"] });
+  const recovered = await (await retryResponse).json();
+  expect(recovered.retrieval.name).toBe("two-tower-weaviate");
+  expect(recovered.reranker.name).toBe("lambdarank");
+  expect(recovered.recommendations.every((item: { movie: { movie_id: string } }) => item.movie.movie_id !== "2571")).toBe(true);
+  expect(await page.evaluate(() => localStorage.getItem("trustworthy-recsys-browser-profile-v1"))).toBe(durableBefore);
+  if (containerEvidenceDir) {
+    await page.screenshot({ path: resolve(containerEvidenceDir, "title-only-retry-recovered.png"), fullPage: true });
+    const payloadEvidence = resolve(containerEvidenceDir, "title-only-failure-retry.json");
+    if (!existsSync(payloadEvidence)) {
+      writeFileSync(payloadEvidence, JSON.stringify({
+        durable_profile_before: durableBefore,
+        durable_profile_after: await page.evaluate(() => localStorage.getItem("trustworthy-recsys-browser-profile-v1")),
+        failed_request: (await failedRequest).postDataJSON(),
+        retry_request: (await retryRequest).postDataJSON(),
+        recovery: { retrieval: recovered.retrieval, reranker: recovered.reranker, matrix_excluded: true },
+      }, null, 2) + "\n", { flag: "wx" });
+    }
+  }
+});

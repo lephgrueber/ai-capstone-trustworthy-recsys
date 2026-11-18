@@ -217,7 +217,36 @@ cd ai-capstone-trustworthy-recsys
 
 See the [model setup guide](docs/team_model_setup.md) for Git LFS and model download instructions.
 
-### Install dependencies
+### Run the full application with containers
+
+The primary learned-application run path builds the API and production frontend
+from the declared Dockerfiles while reusing compatible saved artifacts and an
+already populated Weaviate collection. It does not copy the host Python or Node
+environments, train a model, or publish an index.
+
+```bash
+cp .env.application.example .env.application
+# Set absolute artifact paths and the inspected existing Weaviate network in this ignored file.
+docker compose --env-file .env.application -f compose.application.yml build --pull
+APPLICATION_PORT=15173 docker compose --env-file .env.application -f compose.application.yml up -d
+curl -fsS http://127.0.0.1:15173/ready
+curl -fsS http://127.0.0.1:15173/api/v1/application/status
+```
+
+Open `http://127.0.0.1:15173/` for isolated verification. After it passes, stop
+only the old application process holding port 5173 and relaunch with
+`APPLICATION_PORT=5173`; the normal URL is `http://127.0.0.1:5173/`. Keeping that
+origin preserves its browser-local rating profile.
+
+`docker-compose.yml` remains the standalone Weaviate definition used by existing
+commands and CI. `compose.application.yml` has no database service and joins the
+inspected existing network, preventing the application launch from creating a
+second database or replacing the collection. Exact identity checks, artifact
+mounts, learned smoke request, logs, safe stop/restart commands, new-installation
+publication boundary, and container verification are in [Full application
+containers](docs/container_application.md).
+
+### Install native-development dependencies
 
 **Windows PowerShell:**
 
@@ -278,6 +307,18 @@ npm run dev
 Open `http://127.0.0.1:5173`. The UI labels synthetic fixture content and the
 pass-through reranker. Missing movie posters are expected in fixture mode.
 Stop either development server with Ctrl+C in its terminal.
+
+This Vite/Uvicorn flow is retained for native development. It is not the full
+container launch path described above.
+
+The primary browser workflow is movie search → choose the exact title/year →
+explicitly submit **Your rating** (0.5–5 in half-star steps). The **Your ratings**
+area supports edit, remove, and a separate clear action. Ratings are restored from
+this browser before the first recommendation request and every effective change
+refreshes automatically while retaining the prior results. Search, selection, and
+details views never save feedback. See [browser rating profile and live model
+features](docs/browser_rating_profile.md) for storage, timestamp, compatibility,
+and missing-value rules.
 
 ### Verify the backend you intend to start
 
@@ -507,6 +548,20 @@ npm run build
 cd ..
 ```
 
+The opt-in saved-model rating check requires the prepared artifacts and compatible
+local Weaviate collection. It executes real two-tower retrieval and LambdaRank and
+asserts the three live user features and rated-item exclusions:
+
+```bash
+LEARNED_RATING_INTEGRATION=1 \
+TRUSTWORTHY_RECSYS_BACKEND=learned \
+TRUSTWORTHY_RECSYS_RUN_DIR=data/processed/m3_ratio_80_10_10_20261002 \
+TRUSTWORTHY_RECSYS_RETRIEVAL_INPUTS_DIR=data/downloads/two_tower_80_v1/inputs \
+TRUSTWORTHY_RECSYS_RETRIEVAL_MODEL_DIR=artifacts/retrieval/m4_bundle_weaviate_84366c2 \
+TRUSTWORTHY_RECSYS_RERANKER_MODEL_DIR=artifacts/ranking/lambdarank_v1 \
+.venv/bin/python -m pytest -q -s tests/serving/test_learned_rating_integration.py
+```
+
 #### Browser tests
 
 Install Chromium with `npx playwright install chromium` from `frontend` if needed.
@@ -594,7 +649,8 @@ retrieval with LambdaRank, browser flows with and without artwork, logging,
 latency, and cost assumptions. The [setup audit](docs/readme_audit.md) records
 installation and fixture-mode checks on Windows.
 
-The learned checks used existing local data and services on the same Mac.
+The dated November 9 latency results are native Mac measurements, not container
+performance measurements. The learned checks used existing local data and services on the same Mac.
 Independent second-machine reproduction, physical microphone capture, and
 recovery from a real Weaviate outage remain unverified. See the
 [System Card](docs/system_card.md) for safeguards and remaining risks.

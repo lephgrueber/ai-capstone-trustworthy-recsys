@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timedelta
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -21,11 +22,35 @@ def _unique(values: list[str], name: str) -> list[str]:
     return values
 
 
+class RatingRecord(StrictModel):
+    movie_id: MovieId
+    rating: float = Field(ge=0.5, le=5.0, multiple_of=0.5)
+    rated_at: datetime
+
+    @field_validator("rating")
+    @classmethod
+    def finite_rating(cls, value: float):
+        if not math.isfinite(value):
+            raise ValueError("rating must be finite")
+        return value
+
+    @field_validator("rated_at")
+    @classmethod
+    def utc_timestamp(cls, value: datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("rated_at must include a UTC offset")
+        if value.utcoffset() != timedelta(0):
+            raise ValueError("rated_at must be UTC")
+        return value
+
+
 class PreferenceState(StrictModel):
-    history_items: list[MovieId] = Field(default_factory=list, max_length=100)
-    excluded_movie_ids: list[MovieId] = Field(default_factory=list, max_length=100)
+    history_items: list[MovieId] = Field(default_factory=list, max_length=500)
+    excluded_movie_ids: list[MovieId] = Field(default_factory=list, max_length=500)
     include_genres: list[Genre] = Field(default_factory=list, max_length=20)
     exclude_genres: list[Genre] = Field(default_factory=list, max_length=20)
+    # None means the caller supplied no numeric profile. [] is a complete empty profile.
+    ratings: list[RatingRecord] | None = Field(default=None, max_length=500)
 
     @field_validator("history_items", "excluded_movie_ids", "include_genres", "exclude_genres")
     @classmethod
@@ -40,17 +65,28 @@ class PreferenceState(StrictModel):
         genre_overlap = set(self.include_genres) & set(self.exclude_genres)
         if genre_overlap:
             raise ValueError(f"included and excluded genres overlap: {sorted(genre_overlap)}")
+        if self.ratings is not None:
+            _unique([record.movie_id for record in self.ratings], "rating movie IDs")
         return self
 
 
-class ModelQuery(StrictModel):
-    history_items: list[MovieId] = Field(max_length=100)
-    known_user_id: str | None = Field(default=None, min_length=1, max_length=64)
+class RatingStatistics(StrictModel):
+    mean_rating: float | None = None
+    rating_count: int | None = Field(default=None, ge=0)
+    days_inactive: float | None = Field(default=None, ge=0)
+    complete: bool
 
-    @field_validator("history_items")
+
+class ModelQuery(StrictModel):
+    history_items: list[MovieId] = Field(max_length=500)
+    known_user_id: str | None = Field(default=None, min_length=1, max_length=64)
+    rated_movie_ids: list[MovieId] = Field(default_factory=list, max_length=500)
+    rating_statistics: RatingStatistics | None = None
+
+    @field_validator("history_items", "rated_movie_ids")
     @classmethod
-    def unique_history(cls, values: list[str]):
-        return _unique(values, "history_items")
+    def unique_movie_ids(cls, values: list[str], info):
+        return _unique(values, info.field_name)
 
 
 class ComponentInfo(StrictModel):
@@ -148,6 +184,19 @@ class RecommendationRequest(StrictModel):
     result_count: int = Field(default=12, ge=1, le=50)
     known_user_id: str | None = Field(default=None, min_length=1, max_length=64)
     assignment_key: str | None = Field(default=None, min_length=16, max_length=64, pattern=r'^[a-zA-Z0-9-]+$')
+    # Ephemeral recommendation seeds, never persisted as favorites or ratings.
+    temporary_history_items: list[MovieId] = Field(default_factory=list, max_length=20)
+
+    @field_validator("temporary_history_items")
+    @classmethod
+    def unique_temporary_history(cls, values: list[str]):
+        return _unique(values, "temporary_history_items")
+
+    @model_validator(mode="after")
+    def unambiguous_identity(self):
+        if self.known_user_id is not None and self.preferences.ratings is not None:
+            raise ValueError("known_user_id cannot be combined with a browser numeric profile")
+        return self
 
 
 class Timings(StrictModel):

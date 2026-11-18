@@ -1,0 +1,13 @@
+# Verified container target: CPython 3.13 on native linux/arm64.
+# PyTorch is installed from its CPU-only index before the project extras.
+torch==2.10.0
+numpy==2.5.4
+pandas==2.3.3
+pyarrow==23.0.1
+scipy==1.18.1
+lightgbm==4.7.0
+weaviate-client==4.23.1
+fastapi==0.162.2
+httpx==0.28.1
+pydantic==2.14.3
+uvicorn==0.54.0

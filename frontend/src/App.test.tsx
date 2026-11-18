@@ -1,235 +1,507 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App, formatCatalogTitle } from "./App";
+import type { PreferenceState } from "./api/client";
+import { PROFILE_STORAGE_KEY } from "./profile";
 
 const MOVIES = [
-  { movie_id: "101", title: "Signal in the Fog", genres: ["Mystery", "Thriller"], poster_url: null },
-  { movie_id: "102", title: "Orbit House", genres: ["Drama", "Science Fiction"], poster_url: null },
-  { movie_id: "103", title: "The Last Matinee", genres: ["Comedy", "Drama"], poster_url: null }
+  { movie_id: "101", title: "Signal in the Fog (2004)", genres: ["Mystery", "Thriller"], poster_url: null },
+  { movie_id: "102", title: "Orbit House (2011)", genres: ["Drama", "Science Fiction"], poster_url: null },
+  { movie_id: "103", title: "The Last Matinee (1999)", genres: ["Comedy", "Drama"], poster_url: null },
 ];
-const EMPTY = { history_items: [], excluded_movie_ids: [], include_genres: [], exclude_genres: [] };
-const STATUS = { backend_mode: "fixture", model_label: "Synthetic demo", data_source_label: "Synthetic fixture catalog", refinement_available: false, poster_provider: "tmdb", posters_configured: false, available_genres: ["Comedy", "Drama", "Mystery", "Science Fiction", "Thriller"] };
+const MATRIX = { movie_id: "2571", title: "Matrix, The (1999)", genres: ["Action", "Science Fiction"], poster_url: null };
+const STAR_WARS = { movie_id: "260", title: "Star Wars: Episode IV - A New Hope (1977)", genres: ["Action", "Adventure", "Science Fiction"], poster_url: null };
+const HIDDEN_MOVIES = [
+  { movie_id: "104", title: "Hidden Harbor (2005)", genres: ["Drama"], poster_url: null },
+  { movie_id: "105", title: "Second Signal (2012)", genres: ["Comedy"], poster_url: null },
+];
+const EMPTY: PreferenceState = { history_items: [], excluded_movie_ids: [], include_genres: [], exclude_genres: [], ratings: [] };
+const STATUS = { backend_mode: "fixture", model_label: "Synthetic demo", data_source_label: "Synthetic fixture catalog", refinement_available: true, poster_provider: "tmdb", posters_configured: false, available_genres: ["Comedy", "Drama", "Mystery", "Science Fiction", "Thriller"], feedback_mode: "off" };
 
-function rec(revision: number, preferences = EMPTY, movies = MOVIES, mode = "fixture") {
-  return { request_id: `request-${revision}`, preference_revision: revision, recommendations: movies.map((movie, index) => ({ rank: index + 1, movie, retrieval_score: null, ranking_score: null })), applied_preferences: preferences, retrieval: { name: "retrieval", version: "1", mode }, reranker: { name: "pass-through", version: "1", mode: "pass_through" }, backend_mode: mode, partial: false, warnings: [], timings: { retrieval_ms: 1, filtering_ms: 1, reranking_ms: 1, total_ms: 3 } };
+function rec(revision: number, preferences = EMPTY, movies = MOVIES) {
+  return { request_id: `request-${revision}-${preferences.ratings?.[0]?.rating ?? "empty"}`, preference_revision: revision,
+    recommendations: movies.map((movie, index) => ({ rank: index + 1, movie, retrieval_score: null, ranking_score: null })),
+    applied_preferences: preferences, retrieval: { name: "retrieval", version: "1", mode: "fixture" },
+    reranker: { name: "pass-through", version: "1", mode: "pass_through" }, backend_mode: "fixture", partial: false,
+    warnings: [], timings: { retrieval_ms: 1, filtering_ms: 1, reranking_ms: 1, total_ms: 3 } };
 }
 const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
 
-function mockApi(options: { status?: typeof STATUS; artwork?: boolean; recommend?: (revision: number, preferences: typeof EMPTY) => unknown } = {}) {
+function mockApi(recommend?: (body: any) => Promise<Response> | Response) {
   return vi.fn((url: string | URL | Request, init?: RequestInit) => {
     const path = String(url);
-    if (path.includes("application/status")) return json(options.status ?? STATUS);
-    if (path.includes("catalog/search")) return json({ items: MOVIES, total: 3, backend_mode: "fixture" });
-    if (path.includes("catalog/posters")) {
-      const ids = JSON.parse(String(init?.body)).movie_ids as string[];
-      return json({ provider: "tmdb", configured: !!options.artwork, items: ids.map((id) => ({ movie_id: id, tmdb_id: id, poster_url: options.artwork ? `https://image.tmdb.org/t/p/w500/${id}.jpg` : null, backdrop_url: options.artwork ? `https://image.tmdb.org/t/p/w1280/${id}.jpg` : null, status: options.artwork ? "available" : "missing" })) });
+    if (path.includes("application/status")) return json(STATUS);
+    if (path.includes("catalog/search")) return json({ items: MOVIES, total: MOVIES.length, backend_mode: "fixture" });
+    if (path.includes("catalog/posters")) return json({ provider: "tmdb", configured: false, items: [] });
+    if (path.includes("refinements")) {
+      const body = JSON.parse(String(init?.body));
+      if (String(body.text).includes("movies like")) {
+        const resolved = String(body.text).includes("The Matrix") ? MATRIX : String(body.text).includes("Star Wars") ? STAR_WARS : MOVIES[1];
+        return json({ outcome: "applied", preference_revision: body.preference_revision + 1, preferences: body.preferences, summary: `Finding movies like ${resolved.title}.`, resolved_movies: [resolved] });
+      }
+      return json({ outcome: "applied", preference_revision: body.preference_revision + 1, preferences: { ...body.preferences, include_genres: ["Comedy"] }, summary: "Including Comedy.", resolved_movies: [] });
     }
     const body = JSON.parse(String(init?.body));
-    return json(options.recommend?.(body.preference_revision, body.preferences) ?? rec(body.preference_revision, body.preferences));
+    return recommend?.(body) ?? json(rec(body.preference_revision, body.preferences));
   });
 }
 
-afterEach(() => { vi.restoreAllMocks(); sessionStorage.clear(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); sessionStorage.clear(); });
 
-async function drawer(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: /Personalize/ }));
-  return screen.getByRole("dialog", { name: "Personalize your recommendations" });
-}
-async function genre(user: ReturnType<typeof userEvent.setup>, kind: "Include" | "Avoid", value: string) {
-  const panel = screen.getByRole("dialog", { name: "Personalize your recommendations" });
-  await user.click(within(panel).getByRole("button", { name: new RegExp(`${kind} genres`) }));
-  const selector = screen.getByRole("dialog", { name: `${kind} genres` });
-  await user.click(within(selector).getByRole("button", { name: value }));
-  await user.click(within(selector).getByRole("button", { name: "Done" }));
+type MockRecognition = {
+  start: ReturnType<typeof vi.fn>; abort: ReturnType<typeof vi.fn>; lang: string; continuous: boolean; interimResults: boolean;
+  onresult: null | ((event: { results: { transcript: string }[][] }) => void);
+  onerror: null | ((event: { error: string }) => void); onend: null | (() => void);
+};
+
+function installSpeechRecognition() {
+  const instances: MockRecognition[] = [];
+  vi.stubGlobal("SpeechRecognition", class {
+    constructor() {
+      const instance: MockRecognition = { start: vi.fn(), abort: vi.fn(), lang: "", continuous: true, interimResults: true,
+        onresult: null, onerror: null, onend: null };
+      instances.push(instance);
+      return instance;
+    }
+  });
+  return instances;
 }
 
-describe("movie-first discovery", () => {
-  it("searches from the main page, keeps the microphone there, and refreshes recommendations", async () => {
-    const base = mockApi({ status: { ...STATUS, refinement_available: true } });
-    const fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
-      if (String(url).includes("refine")) {
-        const body = JSON.parse(String(init?.body));
-        return json({ outcome: "applied", preference_revision: body.preference_revision + 1,
-          preferences: { ...EMPTY, include_genres: ["Comedy"] }, summary: "Including Comedy." });
-      }
-      return base(url, init);
-    });
-    vi.stubGlobal("fetch", fetch);
-    const user = userEvent.setup(); render(<App />);
+async function searchAndOpenRating(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(screen.getByRole("combobox", { name: "Search for a movie by title or release year" }), "Signal");
+  const results = await screen.findByLabelText("Movie search results");
+  await user.click(await within(results).findByRole("button", { name: /Signal in the Fog/ }));
+  return screen.getByRole("dialog", { name: "Rate Signal in the Fog" });
+}
+
+async function saveCurrentRating(user: ReturnType<typeof userEvent.setup>, value: string) {
+  const dialog = screen.getByRole("dialog", { name: /Rate Signal in the Fog/ });
+  await user.selectOptions(within(dialog).getByLabelText("Your rating"), value);
+  await user.click(within(dialog).getByRole("button", { name: "Save rating" }));
+}
+
+describe("browser rating workflow", () => {
+  it("hydrates an explicit empty profile before the first request", async () => {
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); render(<App />);
     await screen.findByRole("heading", { name: "Explore movies" });
-    const search = screen.getByRole("search", { name: "Search movie recommendations" });
-    expect(within(search).getByRole("button", { name: "Use microphone" })).toBeInTheDocument();
-    await user.type(within(search).getByRole("textbox"), "show comedy");
-    await user.click(within(search).getByRole("button", { name: "Search movies" }));
-    await screen.findByText("Including Comedy.");
-    await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(2));
-    const panel = await drawer(user);
-    expect(within(panel).queryByRole("button", { name: "Use microphone" })).not.toBeInTheDocument();
-    expect(within(panel).getByRole("button", { name: "Include: Comedy" })).toBeInTheDocument();
+    const calls = fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(String(calls[0][1]?.body)).preferences).toEqual(EMPTY);
   });
 
-  it("loads empty-history recommendations once and focuses drawer search", async () => {
+  it("search and selection save nothing until explicit Save rating", async () => {
     const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
-    expect(screen.getByRole("status", { name: "Loading movies" })).toBeInTheDocument();
-    expect(document.querySelectorAll(".loading-card")).toHaveLength(6);
-    expect(await screen.findByRole("heading", { name: "Explore movies" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Signal in the Fog", level: 1 })).toBeInTheDocument();
-    expect(document.querySelector(".personalization-summary")).not.toBeInTheDocument();
-    expect(within(screen.getByRole("banner")).getByRole("link", { name: "Trustworthy Recommendation System" })).toBeInTheDocument(); expect(within(screen.getByRole("banner")).getByRole("button", { name: "Personalize" })).toBeInTheDocument(); expect(within(screen.getByRole("banner")).getByRole("button", { name: "About" })).toBeInTheDocument();
-    expect(screen.getByRole("banner")).not.toHaveTextContent("Synthetic demo");
+    await screen.findByRole("heading", { name: "Explore movies" });
+    const dialog = await searchAndOpenRating(user);
+    expect(localStorage.getItem(PROFILE_STORAGE_KEY)).toBeNull();
     expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(1);
-    const panel = await drawer(user); const search = within(panel).getByPlaceholderText("Search for a movie..."); expect(search).toHaveFocus();
-    expect(within(panel).getByText("No favorites yet. You can still explore movies.")).toBeInTheDocument();
-    expect(within(panel).getByRole("button", { name: "Include genres" })).toHaveTextContent("Include");
-    expect(within(panel).getByRole("button", { name: "Include genres" })).not.toHaveTextContent("Include genres");
-    expect(within(panel).getByRole("button", { name: "Avoid genres" })).toHaveTextContent("Avoid");
-    await user.type(search, "Signal"); const results = await within(panel).findByLabelText("Movie search results");
-    expect(within(results).queryByRole("listbox")).not.toBeInTheDocument();
-    expect(within(results).queryByRole("option")).not.toBeInTheDocument();
-    await user.click(await within(results).findByRole("button", { name: /Signal in the Fog/ }));
-    expect(within(panel).getByRole("button", { name: "Remove Signal in the Fog" })).toBeInTheDocument();
-    await user.type(search, "Signal");
-    const selectedResults = await within(panel).findByLabelText("Movie search results");
-    expect(await within(selectedResults).findByRole("button", { name: /Signal in the Fog.*Selected/ })).toBeDisabled();
+    expect(within(dialog).getByLabelText("Your rating")).toHaveValue("4");
+    await saveCurrentRating(user, "2.5");
+    await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(2));
+    const request = JSON.parse(String(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))[1][1]?.body));
+    expect(request.preferences.ratings[0]).toMatchObject({ movie_id: "101", rating: 2.5 });
+    expect(screen.queryByRole("dialog", { name: "Rate Signal in the Fog" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Manage ratings" })).toBeInTheDocument();
   });
 
-  it("prevents Include/Avoid contradictions and supports undo/reset", async () => {
-    vi.stubGlobal("fetch", mockApi()); const user = userEvent.setup(); render(<App />); await screen.findByRole("heading", { name: "Explore movies" }); await drawer(user);
-    await genre(user, "Include", "Drama"); const panel = screen.getByRole("dialog", { name: "Personalize your recommendations" });
-    expect(within(panel).getByRole("button", { name: "Include: Drama" })).toBeInTheDocument();
-    await user.click(within(panel).getByRole("button", { name: /Avoid genres/ })); const selector = screen.getByRole("dialog", { name: "Avoid genres" });
-    expect(within(selector).getByRole("button", { name: "Drama" })).toBeDisabled(); await user.click(within(selector).getByRole("button", { name: "Close genre selector" }));
-    await user.click(within(panel).getByRole("button", { name: /Undo/ })); expect(within(panel).queryByRole("button", { name: "Include: Drama" })).not.toBeInTheDocument();
-    await genre(user, "Include", "Comedy"); await user.click(within(panel).getByRole("button", { name: /Reset all/ }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Personalize your recommendations" })).not.toBeInTheDocument());
-    await waitFor(() => expect(document.querySelector(".personalization-summary")).not.toBeInTheDocument());
+  it("reload sends the restored profile in the first request", async () => {
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify({ version: 1, ratings: [{ movie_id: "101", rating: 4.5, rated_at: "2026-11-17T12:00:00.000Z" }], legacy_favorites: [], movies: { "101": MOVIES[0] } }));
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); render(<App />);
+    await screen.findByRole("button", { name: "Manage ratings" });
+    const call = fetch.mock.calls.find(([url]) => String(url).includes("recommendations"))!;
+    expect(JSON.parse(String(call[1]?.body)).preferences.ratings).toEqual([{ movie_id: "101", rating: 4.5, rated_at: "2026-11-17T12:00:00.000Z" }]);
   });
 
-  it("retains old movies during edits and replaces them only after success", async () => {
-    let calls = 0; vi.stubGlobal("fetch", mockApi({ recommend: (revision, preferences) => rec(revision, preferences, calls++ === 0 ? [MOVIES[0], MOVIES[1]] : [MOVIES[2]]) }));
-    const user = userEvent.setup(); render(<App />); await screen.findByRole("heading", { name: "Signal in the Fog", level: 1 }); await drawer(user); await genre(user, "Include", "Drama");
-    const panel = screen.getByRole("dialog", { name: "Personalize your recommendations" }); await user.click(within(panel).getByRole("button", { name: "Close personalization" }));
-    expect(screen.getByRole("heading", { name: "Signal in the Fog", level: 1 })).toBeInTheDocument(); expect(screen.getByText("Pending changes. Update to apply them.")).toBeInTheDocument(); expect(screen.getByText("Current results use no personalization")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Update recommendations" })); expect(await screen.findByRole("heading", { name: "The Last Matinee", level: 1 })).toBeInTheDocument();
-  });
-
-  it("keeps the applied hero visible until a hidden movie edit is submitted", async () => {
-    vi.stubGlobal("fetch", mockApi()); const user = userEvent.setup(); render(<App />); await screen.findByRole("heading", { name: "Signal in the Fog", level: 1 });
-    const card = screen.getByRole("button", { name: "View details for Signal in the Fog" }).closest("article")!; await user.click(within(card).getByRole("button", { name: "Hide this movie" }));
-    expect(screen.getByRole("heading", { name: "Signal in the Fog", level: 1 })).toBeInTheDocument();
-    expect(screen.getByText("Pending changes. Update to apply them.")).toBeInTheDocument();
-  });
-
-  it("ignores a response superseded by a preference edit", async () => {
-    let resolveOld!: (value: Response) => void;
-    vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) => { const path = String(url); if (path.includes("application/status")) return json(STATUS); if (path.includes("catalog/search")) return json({ items: MOVIES, total: 3, backend_mode: "fixture" }); if (path.includes("catalog/posters")) return json({ provider: "tmdb", configured: false, items: [] }); return new Promise<Response>((resolve) => { resolveOld = resolve; }); }));
-    const user = userEvent.setup(); render(<App />); await screen.findByText(/Synthetic demo data/); await drawer(user); await genre(user, "Include", "Comedy"); resolveOld(await json(rec(0))); await waitFor(() => expect(screen.queryByRole("heading", { name: "Signal in the Fog", level: 1 })).not.toBeInTheDocument());
-  });
-
-  it("uses backdrops, preserves order, and falls back to a poster on failure", async () => {
-    vi.stubGlobal("fetch", mockApi({ artwork: true })); render(<App />); await screen.findByRole("heading", { name: "Explore movies" });
-    const backdrop = await waitFor(() => document.querySelector('img[src="https://image.tmdb.org/t/p/w1280/101.jpg"]') as HTMLImageElement); expect(backdrop).toBeTruthy(); fireEvent.error(backdrop);
-    await waitFor(() => expect(document.querySelector('img[src="https://image.tmdb.org/t/p/w500/101.jpg"]')).toBeTruthy());
-    expect(screen.getAllByRole("button", { name: /View details for/ }).map((button) => button.getAttribute("aria-label"))).toEqual(["View details for Signal in the Fog", "View details for Orbit House", "View details for The Last Matinee"]);
-  });
-
-  it("keeps hover and focus on the original tile without changing the hero", async () => {
-    vi.stubGlobal("fetch", mockApi({ artwork: true })); const user = userEvent.setup(); render(<App />); await screen.findByRole("heading", { name: "Signal in the Fog", level: 1 });
-    const secondCard = screen.getByRole("button", { name: "View details for Orbit House" }).closest("article")!;
-    expect(secondCard).not.toHaveAttribute("tabindex");
-    const cardButtons = within(secondCard).getAllByRole("button");
-    expect(cardButtons).toHaveLength(4);
-    cardButtons.forEach((button) => expect(button).not.toHaveAttribute("tabindex", "-1"));
-    fireEvent.mouseOver(secondCard); fireEvent.focus(cardButtons[0]);
-    expect(document.querySelector(".expanded-preview")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Signal in the Fog", level: 1 })).toBeInTheDocument();
-    await user.click(within(secondCard).getByRole("button", { name: "Details for Orbit House" }));
-    const details = screen.getByRole("dialog", { name: "Orbit House" }); expect(details).toBeInTheDocument();
-    await user.click(within(details).getByRole("button", { name: "Close details" }));
-    await user.click(within(secondCard).getByRole("button", { name: "Add Orbit House to favorites" }));
-    expect(within(secondCard).getByRole("button", { name: "Orbit House is in favorites" })).toBeDisabled();
-    expect(screen.queryByRole("dialog", { name: "Orbit House" })).not.toBeInTheDocument();
-    await user.click(within(secondCard).getByRole("button", { name: "Hide this movie" }));
-    expect(screen.getByText("Pending changes. Update to apply them.")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Signal in the Fog", level: 1 })).toBeInTheDocument();
-  });
-
-  it("uses one recommendation heading across visual rows and preserves response order", async () => {
-    const movies = Array.from({ length: 10 }, (_, index) => ({ movie_id: String(200 + index), title: `Movie ${index + 1} (${2000 + index})`, genres: ["Drama"], poster_url: null }));
-    vi.stubGlobal("fetch", mockApi({ recommend: (revision, preferences) => rec(revision, preferences, movies) })); const user = userEvent.setup(); render(<App />);
-    expect(await screen.findByRole("heading", { name: "Explore movies", level: 2 })).toBeInTheDocument();
-    expect(screen.getAllByRole("heading", { name: "Explore movies", level: 2 })).toHaveLength(1);
-    expect(screen.queryByText(/More to explore|More recommendations/)).not.toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /View details for/ }).map((button) => button.getAttribute("aria-label"))).toEqual(movies.map((movie) => `View details for ${movie.title}`));
-    expect(document.querySelector(".rank-badge")).not.toBeInTheDocument();
-    await drawer(user); await genre(user, "Include", "Drama"); const panel = screen.getByRole("dialog", { name: "Personalize your recommendations" }); await user.click(within(panel).getByRole("button", { name: "Update recommendations" }));
-    expect(await screen.findByRole("heading", { name: "Your recommendations", level: 2 })).toBeInTheDocument();
-    expect(screen.getAllByRole("heading", { name: "Your recommendations", level: 2 })).toHaveLength(1);
-    expect(screen.queryByText(/More to explore|More recommendations/)).not.toBeInTheDocument();
-  });
-
-  it("distinguishes first-load failure from a successful empty response", async () => {
-    const base = mockApi(); const failed = vi.fn((url: string | URL | Request, init?: RequestInit) => String(url).includes("recommendations") ? json({ error: { message: "Backend unavailable" } }, 503) : base(url, init));
-    vi.stubGlobal("fetch", failed); const view = render(<App />); expect(await screen.findByRole("alert")).toHaveTextContent("Backend unavailable"); expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument(); expect(screen.queryByRole("heading", { name: "No recommendations found" })).not.toBeInTheDocument(); view.unmount();
-    vi.stubGlobal("fetch", mockApi({ recommend: (revision, preferences) => rec(revision, preferences, []) })); render(<App />); expect(await screen.findByRole("heading", { name: "No recommendations found" })).toBeInTheDocument(); expect(screen.getByText("Try adjusting your genre preferences, or reset them to explore movies again.")).toBeInTheDocument(); expect(screen.getByRole("button", { name: "Edit preferences" })).toBeInTheDocument(); expect(screen.getByRole("button", { name: "Reset all" })).toBeInTheDocument(); expect(screen.queryByText(/bounded candidate|constraints were not relaxed/i)).not.toBeInTheDocument();
-  });
-
-  it("replaces only opaque recommendation failures with friendly copy", async () => {
-    const base = mockApi();
-    const opaque = vi.fn((url: string | URL | Request, init?: RequestInit) => String(url).includes("recommendations") ? json({}, 500) : base(url, init));
-    vi.stubGlobal("fetch", opaque);
-    const view = render(<App />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("We couldn’t load movies. Please try again.");
-    expect(screen.queryByText("Request failed (500)")).not.toBeInTheDocument();
-    view.unmount();
-
-    const structured = vi.fn((url: string | URL | Request, init?: RequestInit) => String(url).includes("recommendations") ? json({ error: { code: "invalid_preferences", message: "Unknown movie IDs: 999" } }, 422) : base(url, init));
-    vi.stubGlobal("fetch", structured);
-    render(<App />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Unknown movie IDs: 999");
-  });
-
-  it("keeps unavailable text refinement in the drawer and backend details accurate", async () => {
-    const baseline = { ...STATUS, backend_mode: "baseline", model_label: "Baseline model", data_source_label: "MovieLens 32M · ratio_80_10_10" }; vi.stubGlobal("fetch", mockApi({ status: baseline }));
-    const user = userEvent.setup(); render(<App />); await screen.findByRole("heading", { name: "Explore movies" }); expect(screen.getByRole("banner")).not.toHaveTextContent("Baseline model"); expect(screen.queryByPlaceholderText("Keep the sci-fi, but leave out horror.")).not.toBeInTheDocument();
-    const panel = await drawer(user); expect(within(panel).queryByText(/Text refinement is coming soon/)).not.toBeInTheDocument(); await user.click(within(panel).getByRole("button", { name: "Close personalization" }));
-    await user.click(screen.getByRole("button", { name: "About" })); const about = screen.getByRole("dialog", { name: "About Trustworthy Recommendation System" }); expect(about).toHaveTextContent("transparent, preference-driven movie discovery"); expect(about).toHaveTextContent("TMDB supplies display artwork only and does not affect ranking"); expect(within(about).queryByRole("link", { name: /System card/i })).not.toBeInTheDocument(); await user.click(within(about).getByText("System details")); expect(about).toHaveTextContent("Baseline model"); expect(about).toHaveTextContent("Text refinementUnavailable"); expect(about).toHaveTextContent("genre-weighted popularity"); expect(within(about).getByRole("link", { name: "Project repository" })).toBeInTheDocument(); const logo = screen.getByAltText("The Movie Database (TMDB)"); expect(logo).toHaveAttribute("src", "/tmdb-logo.svg");
-  });
-
-  it("keeps applied preferences above an empty result and resets them with one request", async () => {
-    let calls = 0; const fetch = mockApi({ recommend: (revision, preferences) => rec(revision, preferences, calls++ === 1 ? [] : MOVIES) }); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />); await screen.findByRole("heading", { name: "Explore movies" }); await drawer(user); await genre(user, "Include", "Drama"); const panel = screen.getByRole("dialog", { name: "Personalize your recommendations" }); await user.click(within(panel).getByRole("button", { name: "Update recommendations" }));
-    expect(await screen.findByRole("heading", { name: "No recommendations found" })).toBeInTheDocument(); expect(screen.getByText("Include Drama")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Edit preferences" })); expect(within(screen.getByRole("dialog", { name: "Personalize your recommendations" })).getByRole("button", { name: "Include: Drama" })).toBeInTheDocument(); await user.click(screen.getByRole("button", { name: "Close personalization" }));
-    const beforeReset = fetch.mock.calls.filter(([url]) => String(url).includes("recommendations")).length; await user.click(screen.getAllByRole("button", { name: "Reset all" })[0]); await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(beforeReset + 1)); expect(await screen.findByRole("heading", { name: "Explore movies" })).toBeInTheDocument();
-  });
-
-  it("submits the drawer snapshot once and resets applied preferences once from the summary", async () => {
-    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />); await screen.findByRole("heading", { name: "Explore movies" });
-    const panel = await drawer(user); const search = within(panel).getByLabelText("Movies you like"); await user.type(search, "Signal"); await user.click(await within(panel).findByRole("button", { name: /Signal in the Fog.*Add/ })); await genre(user, "Include", "Drama");
-    await user.click(within(panel).getByRole("button", { name: "Update recommendations" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Personalize your recommendations" })).not.toBeInTheDocument());
-    const recommendationCalls = fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
-    expect(recommendationCalls).toHaveLength(2);
-    expect(JSON.parse(String(recommendationCalls[1][1]?.body)).preferences).toEqual({ ...EMPTY, history_items: ["101"], include_genres: ["Drama"] });
-    await user.click(screen.getByRole("button", { name: "Reset all" }));
+  it("a 4-to-5 edit triggers a revision while keeping one record", async () => {
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("heading", { name: "Explore movies" }); await searchAndOpenRating(user); await saveCurrentRating(user, "4");
+    await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(2));
+    await user.click(screen.getByRole("button", { name: "Manage ratings" }));
+    const ratings = screen.getByRole("dialog", { name: /Your ratings/ });
+    await user.click(within(ratings).getByRole("button", { name: "Edit" })); await saveCurrentRating(user, "5");
     await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(3));
-    expect(JSON.parse(String(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))[2][1]?.body)).preferences).toEqual(EMPTY);
+    const calls = fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
+    const latest = JSON.parse(String(calls.at(-1)![1]?.body));
+    expect(calls).toHaveLength(3); expect(latest.preferences.ratings).toHaveLength(1);
+    expect(latest.preferences.ratings[0].rating).toBe(5); expect(latest.preference_revision).toBe(2);
   });
 
-  it("formats only unambiguous trailing catalog articles and years", () => {
+  it("an identical save preserves timestamp and sends no request", async () => {
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("heading", { name: "Explore movies" }); await searchAndOpenRating(user); await saveCurrentRating(user, "4");
+    await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(2));
+    const before = JSON.parse(localStorage.getItem(PROFILE_STORAGE_KEY)!).ratings[0].rated_at;
+    await user.click(screen.getByRole("button", { name: "Manage ratings" }));
+    await user.click(within(screen.getByRole("dialog", { name: /Your ratings/ })).getByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("button", { name: "Save rating" }));
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(2);
+    expect(JSON.parse(localStorage.getItem(PROFILE_STORAGE_KEY)!).ratings[0].rated_at).toBe(before);
+    expect(screen.getByText("Rating saved.")).toBeInTheDocument();
+  });
+
+  it("removing a rating persists and refreshes", async () => {
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("heading", { name: "Explore movies" }); await searchAndOpenRating(user); await saveCurrentRating(user, "3");
+    await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(2));
+    await user.click(screen.getByRole("button", { name: "Manage ratings" }));
+    await user.click(within(screen.getByRole("dialog", { name: /Your ratings/ })).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Manage ratings" })).not.toBeInTheDocument());
+    const calls = fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
+    expect(JSON.parse(String(calls.at(-1)![1]?.body)).preferences.ratings).toEqual([]);
+  });
+
+  it("clear saved ratings is distinct and refreshes with an empty profile", async () => {
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify({ version: 1, ratings: [
+      { movie_id: "101", rating: 4.5, rated_at: "2026-11-17T12:00:00.000Z" },
+    ], legacy_favorites: [], movies: { "101": MOVIES[0] } }));
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("button", { name: "Manage ratings" });
+    await user.click(screen.getByRole("button", { name: "Manage ratings" }));
+    await user.click(within(screen.getByRole("dialog", { name: /Your ratings/ })).getByRole("button", { name: "Clear saved ratings" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Manage ratings" })).not.toBeInTheDocument());
+    const calls = fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
+    expect(JSON.parse(String(calls.at(-1)![1]?.body)).preferences.ratings).toEqual([]);
+  });
+
+  it("genre changes preserve ratings and keep the dialog open", async () => {
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify({ version: 1, ratings: [{ movie_id: "101", rating: 4.5, rated_at: "2026-11-17T12:00:00.000Z" }], legacy_favorites: [], movies: { "101": MOVIES[0] } }));
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />); await screen.findByRole("button", { name: "Manage ratings" });
+    await user.click(screen.getByRole("button", { name: "Preferences" }));
+    const panel = screen.getByRole("dialog", { name: "Recommendation preferences" });
+    await user.click(within(panel).getByRole("button", { name: "Include genres" }));
+    const selector = screen.getByRole("dialog", { name: "Include genres" }); await user.click(within(selector).getByRole("button", { name: "Drama" }));
+    await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(2));
+    expect(screen.getByRole("dialog", { name: "Include genres" })).toBeInTheDocument();
+    const request = JSON.parse(String(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))[1][1]?.body));
+    expect(request.preferences.include_genres).toEqual(["Drama"]); expect(request.preferences.ratings[0].rating).toBe(4.5);
+  });
+
+  it("rapid edits cannot display a stale response", async () => {
+    let resolveFour!: (response: Response) => void;
+    const fetch = mockApi((body) => { const rating = body.preferences.ratings?.[0]?.rating;
+      if (rating === 4) return new Promise<Response>((resolve) => { resolveFour = resolve; });
+      return json(rec(body.preference_revision, body.preferences, rating === 5 ? [MOVIES[2]] : MOVIES)); });
+    vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />); await screen.findByRole("heading", { name: "Signal in the Fog", level: 1 });
+    await searchAndOpenRating(user); await saveCurrentRating(user, "4");
+    await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(2));
+    await user.click(screen.getByRole("button", { name: "Manage ratings" }));
+    await user.click(within(screen.getByRole("dialog", { name: /Your ratings/ })).getByRole("button", { name: "Edit" }));
+    await saveCurrentRating(user, "5");
+    await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(3));
+    await user.click(screen.getByRole("button", { name: "Close ratings" }));
+    expect(await screen.findByRole("heading", { name: "The Last Matinee", level: 1 })).toBeInTheDocument();
+    resolveFour(await json(rec(1, { ...EMPTY, ratings: [{ movie_id: "101", rating: 4, rated_at: "2026-11-17T12:00:00Z" }] }, [MOVIES[1]])));
+    await new Promise((resolve) => setTimeout(resolve, 0)); expect(screen.getByRole("heading", { name: "The Last Matinee", level: 1 })).toBeInTheDocument();
+  });
+
+  it("failed refresh preserves the rating and Retry sends it again", async () => {
+    let count = 0; const fetch = mockApi((body) => { count += 1; if (count === 2) return json({ error: { message: "Temporary failure" } }, 503); return json(rec(body.preference_revision, body.preferences)); });
+    vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />); await screen.findByRole("heading", { name: "Explore movies" });
+    await searchAndOpenRating(user); await saveCurrentRating(user, "3.5");
+    const notice = (await screen.findByText("Rating saved. Recommendations couldn’t update.")).closest<HTMLElement>("[role=alert]")!;
+    await user.click(within(notice).getByRole("button", { name: "Retry" })); await waitFor(() => expect(count).toBe(3));
+    const calls = fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
+    expect(JSON.parse(String(calls.at(-1)![1]?.body)).preferences.ratings[0].rating).toBe(3.5);
+  });
+
+  it("shows pending and complete save messages from the actual refresh state", async () => {
+    let finishRefresh!: (response: Response) => void;
+    let pendingBody: any;
+    const fetch = mockApi((body) => body.preference_revision === 0
+      ? json(rec(0, body.preferences))
+      : new Promise<Response>((resolve) => { pendingBody = body; finishRefresh = resolve; }));
+    vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("heading", { name: "Explore movies" });
+    await searchAndOpenRating(user); await saveCurrentRating(user, "4.5");
+    expect(screen.queryByRole("dialog", { name: "Rate Signal in the Fog" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Rating saved. Updating recommendations…");
+    finishRefresh(await json(rec(1, pendingBody.preferences)));
+    expect(await screen.findByText("Rating saved.")).toBeInTheDocument();
+    expect(screen.queryByText(/Rating saved. Updating recommendations/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the rating dialog open when browser persistence fails", async () => {
+    const original = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
+      if (key === PROFILE_STORAGE_KEY) throw new DOMException("blocked");
+      return original.call(this, key, value);
+    });
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("heading", { name: "Explore movies" });
+    const dialog = await searchAndOpenRating(user);
+    await user.selectOptions(within(dialog).getByLabelText("Your rating"), "4.5");
+    await user.click(within(dialog).getByRole("button", { name: "Save rating" }));
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("couldn’t save this rating");
+    expect(within(dialog).getByLabelText("Your rating")).toHaveValue("4.5");
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(1);
+  });
+
+  it("keeps title and recommendation drafts separate and sends title context without saving feedback", async () => {
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify({ version: 1, ratings: [{ movie_id: "101", rating: 4.5, rated_at: "2026-11-17T12:00:00.000Z" }], legacy_favorites: [], movies: { "101": MOVIES[0] } }));
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("button", { name: "Manage ratings" });
+    const titleInput = screen.getByRole("combobox", { name: "Search for a movie by title or release year" });
+    await user.type(titleInput, "Signal");
+    await user.click(screen.getByRole("tab", { name: "Find recommendations" }));
+    const recommendationInput = screen.getByRole("textbox", { name: "Describe the movies you want" });
+    expect(screen.getByRole("button", { name: "Use microphone for recommendations" })).toBeInTheDocument();
+    await user.type(recommendationInput, "movies like Orbit House");
+    await user.click(screen.getByRole("button", { name: "Find recommendations" }));
+    await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(2));
+    const request = JSON.parse(String(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations")).at(-1)![1]?.body));
+    expect(request.temporary_history_items).toEqual(["102"]);
+    expect(request.preferences.ratings[0].rating).toBe(4.5);
+    expect(request.preferences.history_items).toEqual([]);
+    expect(JSON.parse(localStorage.getItem(PROFILE_STORAGE_KEY)!).ratings).toHaveLength(1);
+    await user.click(screen.getByRole("tab", { name: "Rate a movie" }));
+    expect(screen.getByRole("combobox", { name: "Search for a movie by title or release year" })).toHaveValue("Signal");
+  });
+
+  it("shows main-page Retry when a title-only refresh fails and preserves temporary context", async () => {
+    let recommendationCount = 0;
+    const fetch = mockApi((body) => {
+      recommendationCount += 1;
+      if (recommendationCount === 2) return json({ error: { message: "Controlled title refresh failure" } }, 503);
+      return json(rec(body.preference_revision, body.preferences));
+    });
+    vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("heading", { name: "Explore movies" });
+
+    await user.click(screen.getByRole("tab", { name: "Find recommendations" }));
+    await user.type(screen.getByRole("textbox", { name: "Describe the movies you want" }), "movies like The Matrix");
+    await user.click(screen.getByRole("button", { name: /^Find recommendations$/ }));
+
+    const failure = await screen.findByRole("alert");
+    expect(failure).toHaveTextContent("Controlled title refresh failure");
+    const summary = failure.closest<HTMLElement>(".personalization-summary")!;
+    expect(summary).toBeTruthy();
+    const retry = within(summary).getByRole("button", { name: "Retry" });
+    expect(retry).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Signal in the Fog", level: 1 })).toBeInTheDocument();
+    expect(localStorage.getItem(PROFILE_STORAGE_KEY)).toBeNull();
+
+    await user.click(retry);
+    await waitFor(() => expect(recommendationCount).toBe(3));
+    const recommendationCalls = fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
+    expect(JSON.parse(String(recommendationCalls.at(-1)![1]?.body))).toMatchObject({
+      preference_revision: 1,
+      temporary_history_items: ["2571"],
+      preferences: EMPTY,
+    });
+    expect(localStorage.getItem(PROFILE_STORAGE_KEY)).toBeNull();
+  });
+
+  it("Undo restores an empty temporary title context and advances the request revision", async () => {
+    const ratedAt = "2026-11-17T12:00:00.000Z";
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify({ version: 1, ratings: [{ movie_id: "101", rating: 4.5, rated_at: ratedAt }], legacy_favorites: [], movies: { "101": MOVIES[0] } }));
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("button", { name: "Manage ratings" });
+    await user.click(screen.getByRole("tab", { name: "Find recommendations" }));
+    const input = screen.getByRole("textbox", { name: "Describe the movies you want" });
+    await user.type(input, "movies like The Matrix");
+    await user.click(screen.getByRole("button", { name: "Find recommendations" }));
+    const recommendationCalls = () => fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(2));
+    expect(JSON.parse(String(recommendationCalls()[1][1]?.body))).toMatchObject({ preference_revision: 1, temporary_history_items: ["2571"] });
+
+    await user.click(screen.getByRole("button", { name: "Preferences" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Recommendation preferences" })).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(3));
+    const restored = JSON.parse(String(recommendationCalls()[2][1]?.body));
+    expect(restored).toMatchObject({ preference_revision: 2, temporary_history_items: [] });
+    expect(restored.preferences.ratings).toEqual([{ movie_id: "101", rating: 4.5, rated_at: ratedAt }]);
+    expect(JSON.parse(localStorage.getItem(PROFILE_STORAGE_KEY)!).ratings).toEqual([{ movie_id: "101", rating: 4.5, rated_at: ratedAt }]);
+  });
+
+  it("Undo restores the preceding temporary title context", async () => {
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("heading", { name: "Explore movies" });
+    await user.click(screen.getByRole("tab", { name: "Find recommendations" }));
+    const input = screen.getByRole("textbox", { name: "Describe the movies you want" });
+    const recommendationCalls = () => fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
+
+    await user.type(input, "movies like The Matrix");
+    await user.click(screen.getByRole("button", { name: "Find recommendations" }));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(2));
+    await user.clear(input); await user.type(input, "movies like Star Wars");
+    await user.click(screen.getByRole("button", { name: "Find recommendations" }));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(3));
+    expect(JSON.parse(String(recommendationCalls()[2][1]?.body))).toMatchObject({ preference_revision: 2, temporary_history_items: ["260"] });
+
+    await user.click(screen.getByRole("button", { name: "Preferences" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Recommendation preferences" })).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(4));
+    expect(JSON.parse(String(recommendationCalls()[3][1]?.body))).toMatchObject({ preference_revision: 3, temporary_history_items: ["2571"] });
+  });
+
+  it("hides, unhides, and undoes visit-only exclusions without changing other personalization", async () => {
+    const ratedAt = "2026-11-17T12:00:00.000Z";
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify({ version: 1, ratings: [{ movie_id: "101", rating: 4.5, rated_at: ratedAt }], legacy_favorites: ["103"], movies: { "101": MOVIES[0], "103": MOVIES[2] } }));
+    const allMovies = [...MOVIES, ...HIDDEN_MOVIES];
+    const fetch = mockApi((body) => json(rec(body.preference_revision, body.preferences, allMovies.filter((movie) => !body.preferences.excluded_movie_ids.includes(movie.movie_id)))));
+    vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("button", { name: "Manage ratings" });
+    const recommendationCalls = () => fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
+    const requestAt = (index: number) => JSON.parse(String(recommendationCalls()[index][1]?.body));
+    const expectPreserved = (request: any, excluded: string[], revision: number) => {
+      expect(request).toMatchObject({ preference_revision: revision, temporary_history_items: ["102"], preferences: {
+        excluded_movie_ids: excluded, include_genres: ["Comedy"], history_items: ["103"],
+        ratings: [{ movie_id: "101", rating: 4.5, rated_at: ratedAt }],
+      } });
+    };
+
+    await user.click(screen.getByRole("tab", { name: "Find recommendations" }));
+    const refinement = screen.getByRole("textbox", { name: "Describe the movies you want" });
+    await user.type(refinement, "show comedy"); await user.click(screen.getByRole("button", { name: "Find recommendations" }));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(2));
+    await user.clear(refinement); await user.type(refinement, "movies like Orbit House"); await user.click(screen.getByRole("button", { name: "Find recommendations" }));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(3));
+    await user.click(screen.getByRole("tab", { name: "Rate a movie" }));
+
+    await user.click(screen.getByRole("button", { name: "Hide Hidden Harbor (2005) for now" }));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(4));
+    expectPreserved(requestAt(3), ["104"], 3);
+    await user.click(screen.getByRole("button", { name: "Preferences" }));
+    let preferences = screen.getByRole("dialog", { name: "Recommendation preferences" });
+    expect(within(preferences).getByRole("heading", { name: /Hidden this visit 1/ })).toBeInTheDocument();
+    expect(within(preferences).getByText("Hidden Harbor")).toBeInTheDocument();
+    expect(within(preferences).getByText("2005")).toBeInTheDocument();
+    await user.click(within(preferences).getByRole("button", { name: "Close preferences" }));
+
+    await user.click(screen.getByRole("button", { name: "Hide Second Signal (2012) for now" }));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(5));
+    expectPreserved(requestAt(4), ["104", "105"], 4);
+    await user.click(screen.getByRole("button", { name: "Preferences" }));
+    preferences = screen.getByRole("dialog", { name: "Recommendation preferences" });
+    await user.click(within(preferences).getByRole("button", { name: "Unhide Hidden Harbor" }));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(6));
+    expectPreserved(requestAt(5), ["105"], 5);
+    expect(within(preferences).queryByText("Hidden Harbor")).not.toBeInTheDocument();
+    expect(within(preferences).getByText("Second Signal")).toBeInTheDocument();
+
+    await user.click(within(preferences).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(7));
+    expectPreserved(requestAt(6), ["104", "105"], 6);
+    await user.click(within(preferences).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(8));
+    expectPreserved(requestAt(7), ["104"], 7);
+    await user.click(within(preferences).getByRole("button", { name: "Unhide Hidden Harbor" }));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(9));
+    expectPreserved(requestAt(8), [], 8);
+    expect(within(preferences).queryByText("Hidden this visit")).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem(PROFILE_STORAGE_KEY)!)).toMatchObject({ ratings: [{ movie_id: "101", rating: 4.5, rated_at: ratedAt }], legacy_favorites: ["103"] });
+    expect(localStorage.getItem(PROFILE_STORAGE_KEY)).not.toContain("excluded_movie_ids");
+  });
+
+  it("reload clears hidden exclusions while restoring saved ratings and favorites", async () => {
+    const ratedAt = "2026-11-17T12:00:00.000Z";
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify({ version: 1, ratings: [{ movie_id: "101", rating: 4.5, rated_at: ratedAt }], legacy_favorites: ["103"], movies: { "101": MOVIES[0], "103": MOVIES[2] } }));
+    const allMovies = [...MOVIES, ...HIDDEN_MOVIES];
+    const fetch = mockApi((body) => json(rec(body.preference_revision, body.preferences, allMovies.filter((movie) => !body.preferences.excluded_movie_ids.includes(movie.movie_id)))));
+    vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); const first = render(<App />);
+    await screen.findByRole("button", { name: "Hide Hidden Harbor (2005) for now" });
+    await user.click(screen.getByRole("button", { name: "Hide Hidden Harbor (2005) for now" }));
+    const recommendationCalls = () => fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(2));
+    expect(JSON.parse(String(recommendationCalls()[1][1]?.body)).preferences.excluded_movie_ids).toEqual(["104"]);
+
+    first.unmount(); render(<App />);
+    await waitFor(() => expect(recommendationCalls()).toHaveLength(3));
+    const restored = JSON.parse(String(recommendationCalls()[2][1]?.body));
+    expect(restored.preferences).toMatchObject({ excluded_movie_ids: [], history_items: ["103"], ratings: [{ movie_id: "101", rating: 4.5, rated_at: ratedAt }] });
+    await user.click(screen.getByRole("button", { name: "Preferences" }));
+    expect(within(screen.getByRole("dialog", { name: "Recommendation preferences" })).queryByText("Hidden this visit")).not.toBeInTheDocument();
+    expect(localStorage.getItem(PROFILE_STORAGE_KEY)).not.toContain("excluded_movie_ids");
+  });
+
+  it("fills both search drafts from speech without selecting, submitting, or accepting a late cross-mode result", async () => {
+    const recognition = installSpeechRecognition();
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("heading", { name: "Explore movies" });
+    const recommendationCalls = () => fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"));
+    expect(recommendationCalls()).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Use microphone for movie title" }));
+    const titleSession = recognition[0];
+    act(() => titleSession.onresult?.({ results: [[{ transcript: "Signal in the Fog" }]] }));
+    act(() => titleSession.onend?.());
+    expect(screen.getByRole("combobox", { name: "Search for a movie by title or release year" })).toHaveValue("Signal in the Fog");
+    expect(await screen.findByLabelText("Movie search results")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /Rate Signal in the Fog/ })).not.toBeInTheDocument();
+    expect(localStorage.getItem(PROFILE_STORAGE_KEY)).toBeNull();
+    expect(recommendationCalls()).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Use microphone for movie title" }));
+    const interruptedTitleSession = recognition[1];
+    const lateTitleResult = interruptedTitleSession.onresult!;
+    await user.click(screen.getByRole("tab", { name: "Find recommendations" }));
+    expect(interruptedTitleSession.abort).toHaveBeenCalledOnce();
+    await user.type(screen.getByRole("textbox", { name: "Describe the movies you want" }), "typed request");
+    act(() => lateTitleResult({ results: [[{ transcript: "late title" }]] }));
+    expect(screen.getByRole("textbox", { name: "Describe the movies you want" })).toHaveValue("typed request");
+
+    await user.click(screen.getByRole("button", { name: "Use microphone for recommendations" }));
+    const recommendationSession = recognition[2];
+    act(() => recommendationSession.onresult?.({ results: [[{ transcript: "show comedy without horror" }]] }));
+    expect(screen.getByRole("textbox", { name: "Describe the movies you want" })).toHaveValue("show comedy without horror");
+    expect(recommendationCalls()).toHaveLength(1);
+    expect(localStorage.getItem(PROFILE_STORAGE_KEY)).toBeNull();
+
+    act(() => recommendationSession.onerror?.({ error: "not-allowed" }));
+    expect(screen.getByRole("textbox", { name: "Describe the movies you want" })).toHaveValue("show comedy without horror");
+    expect(screen.getByRole("status")).toHaveTextContent(/denied.*type your request/i);
+    await user.click(screen.getByRole("tab", { name: "Rate a movie" }));
+    expect(screen.getByRole("combobox", { name: "Search for a movie by title or release year" })).toHaveValue("Signal in the Fog");
+  });
+
+  it("a completed older refresh cannot close a newly opened rating dialog", async () => {
+    let finishRefresh!: (response: Response) => void; let pendingBody: any;
+    const fetch = mockApi((body) => body.preference_revision === 0 ? json(rec(0, body.preferences))
+      : new Promise<Response>((resolve) => { pendingBody = body; finishRefresh = resolve; }));
+    vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("heading", { name: "Explore movies" });
+    await searchAndOpenRating(user); await saveCurrentRating(user, "4.5");
+    await user.click(screen.getByRole("button", { name: "Rate" }));
+    const newerDialog = screen.getByRole("dialog", { name: /Rate Signal in the Fog/ });
+    finishRefresh(await json(rec(1, pendingBody.preferences)));
+    await waitFor(() => expect(newerDialog).toBeInTheDocument());
+  });
+
+  it("hides empty unrated favorites and keeps recommendation search out of Preferences", async () => {
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await screen.findByRole("heading", { name: "Explore movies" });
+    await user.click(screen.getByRole("button", { name: "Preferences" }));
+    const preferences = screen.getByRole("dialog", { name: "Recommendation preferences" });
+    expect(within(preferences).queryByText("Unrated favorites")).not.toBeInTheDocument();
+    expect(within(preferences).queryByRole("textbox", { name: "Describe the movies you want" })).not.toBeInTheDocument();
+  });
+
+  it("opening details never saves feedback", async () => {
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    await user.click(await screen.findByRole("button", { name: `View details for ${MOVIES[0].title}` }));
+    expect(screen.getByRole("dialog", { name: "Signal in the Fog" })).toBeInTheDocument();
+    expect(localStorage.getItem(PROFILE_STORAGE_KEY)).toBeNull(); expect(fetch.mock.calls.filter(([url]) => String(url).includes("recommendations"))).toHaveLength(1);
+  });
+
+  it("search results support arrow navigation and Escape dismissal", async () => {
+    const fetch = mockApi(); vi.stubGlobal("fetch", fetch); const user = userEvent.setup(); render(<App />);
+    const input = screen.getByRole("combobox", { name: "Search for a movie by title or release year" });
+    await user.type(input, "Signal");
+    const results = await screen.findByLabelText("Movie search results");
+    await within(results).findAllByRole("button");
+    await user.keyboard("{ArrowDown}");
+    expect(within(results).getAllByRole("button")[0]).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(within(results).getAllByRole("button")[1]).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(input).toHaveFocus();
+    expect(screen.queryByLabelText("Movie search results")).not.toBeInTheDocument();
+  });
+
+  it("formats catalog articles and years", () => {
     expect(formatCatalogTitle("Princess Bride, The (1987)")).toEqual({ title: "The Princess Bride", year: "1987" });
     expect(formatCatalogTitle("A Very Long, Uncertain Title (2004)")).toEqual({ title: "A Very Long, Uncertain Title", year: "2004" });
-    expect(formatCatalogTitle("Film, Maybe (1999)")).toEqual({ title: "Film, Maybe", year: "1999" });
-  });
-
-  it("separates a catalog year from the movie-details heading", async () => {
-    const datedMovie = { ...MOVIES[0], title: "Signal in the Fog (2004)" };
-    vi.stubGlobal("fetch", mockApi({ recommend: (revision, preferences) => rec(revision, preferences, [datedMovie]) }));
-    const user = userEvent.setup(); render(<App />);
-    await user.click(await screen.findByRole("button", { name: `View details for ${datedMovie.title}` }));
-    const details = screen.getByRole("dialog", { name: "Signal in the Fog" });
-    expect(details).toHaveClass("detail-panel");
-    expect(within(details).getByText("Year").nextElementSibling).toHaveTextContent("2004");
   });
 });

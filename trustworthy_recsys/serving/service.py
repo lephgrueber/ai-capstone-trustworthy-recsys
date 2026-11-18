@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from collections.abc import Callable
 
 from trustworthy_recsys.serving.catalog import Catalog
 from trustworthy_recsys.serving.components import RetrievalComponent, RerankingComponent
@@ -18,6 +20,7 @@ from trustworthy_recsys.serving.contracts import (
     ScoredMovie,
     Timings,
 )
+from trustworthy_recsys.serving.profile import derive_model_query
 
 
 class ServiceInputError(ValueError):
@@ -38,9 +41,12 @@ class RecommendationService:
     backend_mode: str
     candidate_budget: int = 100
     feedback_store: object | None = None
+    clock: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc), repr=False, compare=False)
 
     def validate_preferences(self, request: RecommendationRequest) -> None:
-        supplied = set(request.preferences.history_items) | set(request.preferences.excluded_movie_ids)
+        supplied = set(request.preferences.history_items) | set(request.preferences.excluded_movie_ids) | set(request.temporary_history_items)
+        if request.preferences.ratings is not None:
+            supplied.update(record.movie_id for record in request.preferences.ratings)
         unknown = sorted(supplied - self.catalog.supported_ids)
         if unknown:
             raise ServiceInputError("unknown_movie_ids", f"Unknown or unsupported movie IDs: {unknown}")
@@ -49,11 +55,21 @@ class RecommendationService:
         unknown_genres = sorted(genres - known_genres)
         if unknown_genres:
             raise ServiceInputError("unknown_genres", f"Unknown genres: {unknown_genres}")
+        hidden_context = sorted(set(request.temporary_history_items) & set(request.preferences.excluded_movie_ids))
+        if hidden_context:
+            raise ServiceInputError("conflicting_temporary_context", f"Temporary recommendation seeds are hidden: {hidden_context}")
 
     def recommend(self, request: RecommendationRequest, request_id: str | None = None) -> RecommendationResponse:
         started = time.perf_counter()
         self.validate_preferences(request)
-        query = ModelQuery(history_items=request.preferences.history_items, known_user_id=request.known_user_id)
+        try:
+            query = derive_model_query(request.preferences, request.known_user_id, self.clock())
+            combined_history = list(dict.fromkeys([*query.history_items, *request.temporary_history_items]))
+            if len(combined_history) > 500:
+                raise ValueError("combined saved and temporary history exceeds 500 movies")
+            query = query.model_copy(update={"history_items": combined_history})
+        except ValueError as error:
+            raise ServiceInputError("invalid_rating_profile", str(error)) from error
         retrieval_started = time.perf_counter()
         # The reranker sees the full configured pool; it is not scaled down by result_count.
         budget = self.candidate_budget
@@ -76,7 +92,12 @@ class RecommendationService:
             raise ComponentOutputError(f"retrieval returned IDs outside the supported catalog: {invalid}")
 
         score_by_id = {item.movie_id: item.score for item in candidates.candidates}
-        filtered = [item for item in candidates.candidates if self.catalog.allows(item.movie_id, request.preferences)]
+        rated_ids = set(query.rated_movie_ids)
+        temporary_ids = set(request.temporary_history_items)
+        filtered = [
+            item for item in candidates.candidates
+            if item.movie_id not in rated_ids and item.movie_id not in temporary_ids and self.catalog.allows(item.movie_id, request.preferences)
+        ]
         filtering_done = time.perf_counter()
         filtered_batch = CandidateBatch(
             candidates=filtered,
@@ -103,7 +124,7 @@ class RecommendationService:
         if len(ranked.items) > ranking_limit:
             raise ComponentOutputError("reranker exceeded the requested result count")
         # Defense in depth: reapply all hard constraints after reranking.
-        if any(not self.catalog.allows(movie_id, request.preferences) for movie_id in ranked_ids):
+        if any(movie_id in rated_ids or movie_id in temporary_ids or not self.catalog.allows(movie_id, request.preferences) for movie_id in ranked_ids):
             raise ComponentOutputError("final results violate hard constraints")
 
         recommendations = [

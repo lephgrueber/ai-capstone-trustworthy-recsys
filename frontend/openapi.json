@@ -880,7 +880,7 @@
               "pattern": "^[^\\s]+$"
             },
             "type": "array",
-            "maxItems": 100,
+            "maxItems": 500,
             "title": "History Items"
           },
           "excluded_movie_ids": {
@@ -891,7 +891,7 @@
               "pattern": "^[^\\s]+$"
             },
             "type": "array",
-            "maxItems": 100,
+            "maxItems": 500,
             "title": "Excluded Movie Ids"
           },
           "include_genres": {
@@ -913,11 +913,57 @@
             "type": "array",
             "maxItems": 20,
             "title": "Exclude Genres"
+          },
+          "ratings": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RatingRecord"
+                },
+                "type": "array",
+                "maxItems": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratings"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "title": "PreferenceState"
+      },
+      "RatingRecord": {
+        "properties": {
+          "movie_id": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "pattern": "^[^\\s]+$",
+            "title": "Movie Id"
+          },
+          "rating": {
+            "type": "number",
+            "multipleOf": 0.5,
+            "maximum": 5.0,
+            "minimum": 0.5,
+            "title": "Rating"
+          },
+          "rated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Rated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "movie_id",
+          "rating",
+          "rated_at"
+        ],
+        "title": "RatingRecord"
       },
       "RecommendationItem": {
         "properties": {
@@ -1009,6 +1055,17 @@
               }
             ],
             "title": "Assignment Key"
+          },
+          "temporary_history_items": {
+            "items": {
+              "type": "string",
+              "maxLength": 32,
+              "minLength": 1,
+              "pattern": "^[^\\s]+$"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Temporary History Items"
           }
         },
         "additionalProperties": false,

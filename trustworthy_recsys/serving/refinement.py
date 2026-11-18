@@ -60,7 +60,9 @@ class CatalogInterpreter:
             return UnsupportedRefinement(message='Some saved movie choices are not in the active catalog. Reset those choices first.')
         if text in {'reset', 'reset preferences', 'clear preferences', 'start over'}:
             return AppliedRefinement(preference_revision=request.preference_revision+1,
-                preferences=PreferenceState(), summary='Cleared movie preferences.')
+                preferences=request.preferences.model_copy(update={
+                    'include_genres': [], 'exclude_genres': []
+                }), summary='Cleared genre filters; saved ratings and movie choices were preserved.')
         # A title clause consumes its suffix so words inside a title are not genre commands.
         title_match = re.search(r'\b(?:similar to|movies like|films like|like)\s+(.+)$', text)
         next_state = request.preferences.model_dump()
@@ -75,13 +77,11 @@ class CatalogInterpreter:
                 return ClarificationRefinement(question='That title matches multiple movies. Include the release year.')
             movie_id = next(iter(found))
             if re.search(r"\b(?:not|don't|do not|without|avoid)\b", text[:title_match.start()]):
-                return ClarificationRefinement(question='For a movie to avoid, use the hide control. “Movies like” adds a positive example.')
+                return ClarificationRefinement(question='Use the hide control for a movie you want to avoid.')
             if movie_id in next_state['excluded_movie_ids']:
-                return ClarificationRefinement(question='That movie is currently hidden. Unhide it before using it as a positive example.')
-            if movie_id not in next_state['history_items']:
-                next_state['history_items'].append(movie_id)
-            descriptions.append('Using '+self.catalog.movies[movie_id].title+' as a positive example')
+                return ClarificationRefinement(question='That movie is hidden. Remove it from hidden titles before using it here.')
             resolved_movies.append(self.catalog.movies[movie_id])
+            descriptions.append('Finding movies like '+self.catalog.movies[movie_id].title)
             text = text[:title_match.start()]
         aliases = {g.casefold(): g for g in self.catalog.genres}
         science_fiction = 'Sci-Fi' if 'Sci-Fi' in self.catalog.genres else 'Science Fiction'

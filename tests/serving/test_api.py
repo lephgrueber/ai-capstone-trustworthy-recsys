@@ -51,6 +51,15 @@ def test_catalog_search_keeps_punctuation_prefixed_titles():
     assert [movie.movie_id for movie in catalog.search("'Til", 5)] == ["1"]
 
 
+def test_catalog_search_prioritizes_exact_and_prefix_titles_over_broader_matches():
+    catalog = Catalog({
+        "1": CatalogMovie(movie_id="1", title="All These Sleepless Nights (2016)", genres=["Documentary"]),
+        "2": CatalogMovie(movie_id="2", title="Sleepless (2017)", genres=["Action"]),
+        "3": CatalogMovie(movie_id="3", title="Sleepless in Seattle (1993)", genres=["Romance"]),
+    })
+    assert [movie.movie_id for movie in catalog.search("sleepless", 5)] == ["2", "3", "1"]
+
+
 def test_new_visitor_recommendations_exclude_history_and_preserve_null_scores():
     with TestClient(create_app()) as client:
         response = client.post("/api/v1/recommendations", json=payload())
@@ -96,6 +105,18 @@ def test_unknown_duplicate_and_contradictory_inputs_are_distinct_422_errors():
     assert contradiction.status_code == 422 and contradiction.json()["error"]["code"] == "validation_error"
 
 
+def test_rating_id_and_future_timestamp_fail_with_controlled_errors():
+    with TestClient(create_app()) as client:
+        unknown = client.post("/api/v1/recommendations", json=payload(
+            history_items=[], ratings=[{"movie_id": "999", "rating": 4, "rated_at": "2026-11-17T12:00:00Z"}],
+        ))
+        future = client.post("/api/v1/recommendations", json=payload(
+            history_items=[], ratings=[{"movie_id": "101", "rating": 4, "rated_at": "2099-01-01T00:00:00Z"}],
+        ))
+    assert unknown.status_code == 422 and unknown.json()["error"]["code"] == "unknown_movie_ids"
+    assert future.status_code == 422 and future.json()["error"]["code"] == "invalid_rating_profile"
+
+
 def test_unconfigured_refinement_is_truthfully_unavailable():
     from trustworthy_recsys.serving.refinement import UnavailableInterpreter
     with TestClient(create_app(interpreter=UnavailableInterpreter())) as client:
@@ -134,7 +155,7 @@ def test_refinement_interpreter_boundary_accepts_deterministic_fake():
     assert response.json() == {
         "outcome": "applied",
         "preference_revision": 1,
-        "preferences": {**payload()["preferences"], "include_genres": ["Comedy"]},
+        "preferences": {**payload()["preferences"], "include_genres": ["Comedy"], "ratings": None},
         "summary": "Included Comedy.",
         "resolved_movies": [],
     }

@@ -27,7 +27,14 @@ class Catalog:
         needle = query.casefold().strip()
         values = self.movies.values()
         matches = [movie for movie in values if not needle or needle in movie.title.casefold()]
-        return sorted(matches, key=lambda movie: (movie.title.casefold(), movie.movie_id))[:limit]
+
+        def order(movie: CatalogMovie):
+            title = movie.title.casefold()
+            title_without_year = title.rsplit(" (", 1)[0] if title.endswith(")") else title
+            relevance = 0 if title_without_year == needle else 1 if title_without_year.startswith(needle) else 2
+            return relevance, title, movie.movie_id
+
+        return sorted(matches, key=order)[:limit]
 
     def allows(self, movie_id: str, preferences: PreferenceState) -> bool:
         movie = self.movies.get(movie_id)

@@ -15,6 +15,7 @@ from trustworthy_recsys.serving.contracts import (
     ComponentInfo,
     ModelQuery,
     PreferenceState,
+    RecommendationRequest,
     RankingResult,
     ScoredMovie,
 )
@@ -38,6 +39,37 @@ def test_preference_movie_ids_must_be_distinct(field):
 def test_contradictory_genres_are_rejected():
     with pytest.raises(ValidationError, match="overlap"):
         PreferenceState(include_genres=["Drama"], exclude_genres=["Drama"])
+
+
+def test_rating_records_validate_value_uniqueness_timestamp_and_identity_mode():
+    valid = {"movie_id": "101", "rating": 4.5, "rated_at": "2026-11-17T12:00:00Z"}
+    assert PreferenceState(ratings=[valid]).ratings[0].rating == 4.5
+    for bad in (0, 5.5, 4.2):
+        with pytest.raises(ValidationError):
+            PreferenceState(ratings=[{**valid, "rating": bad}])
+    with pytest.raises(ValidationError, match="distinct"):
+        PreferenceState(ratings=[valid, valid])
+    with pytest.raises(ValidationError, match="UTC offset"):
+        PreferenceState(ratings=[{**valid, "rated_at": "2026-11-17T12:00:00"}])
+    with pytest.raises(ValidationError, match="must be UTC"):
+        PreferenceState(ratings=[{**valid, "rated_at": "2026-11-17T07:00:00-05:00"}])
+    with pytest.raises(ValidationError, match="known_user_id"):
+        RecommendationRequest(
+            session_id="browser",
+            preference_revision=0,
+            preferences=PreferenceState(ratings=[valid]),
+            known_user_id="42",
+        )
+
+
+def test_temporary_history_is_bounded_and_distinct():
+    with pytest.raises(ValidationError, match="distinct"):
+        RecommendationRequest(
+            session_id="browser",
+            preference_revision=0,
+            preferences=PreferenceState(ratings=[]),
+            temporary_history_items=["101", "101"],
+        )
 
 
 def test_candidate_ids_and_scores_are_validated():

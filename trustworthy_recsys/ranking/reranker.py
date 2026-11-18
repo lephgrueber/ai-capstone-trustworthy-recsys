@@ -72,7 +72,9 @@ class LambdaRankReranker:
         if any(item.score is not None for item in items):
             scores = np.array([np.nan if item.score is None else item.score for item in items], dtype="float32")
         # Position is the filtered retrieval order; hard filters only remove candidates.
-        matrix = self.features.build(query.history_items, indices, scores, query.known_user_id)
+        matrix = self.features.build(
+            query.history_items, indices, scores, query.known_user_id, query.rating_statistics
+        )
         predicted = self.booster.predict(matrix[:, self.columns], num_threads=lightgbm_threads(1))
         order = np.argsort(-predicted, kind="stable")[:limit]
         warnings = [] if scores is not None else ["Reranked popularity-fallback candidates without retrieval scores."]

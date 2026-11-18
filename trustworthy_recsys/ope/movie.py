@@ -39,7 +39,10 @@ def check_decision(row):
     expected = probabilities(len(ids), row['epsilon'])
     if not np.allclose(expected, row['probabilities'], rtol=1e-12, atol=1e-12) or not np.isclose(row['propensity'], expected[index], rtol=1e-12, atol=1e-12):
         raise ValueError('Logging probabilities differ from policy')
-    if set(ids+row['fixed_grid']) & set(row['context']['preferences']['history_items']+row['context']['preferences']['excluded_movie_ids']):
+    preferences = row['context']['preferences']
+    rated_ids = [record['movie_id'] for record in (preferences.get('ratings') or [])]
+    temporary_ids = row['context'].get('temporary_history_items', [])
+    if set(ids+row['fixed_grid']) & set(preferences['history_items']+preferences['excluded_movie_ids']+rated_ids+temporary_ids):
         raise ValueError('Previously liked or hidden movie entered the experiment')
 
 

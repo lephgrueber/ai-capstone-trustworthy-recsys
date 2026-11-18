@@ -19,9 +19,10 @@ def test_genres_negation_and_title_flow():
     assert result.preferences.include_genres == ['Comedy']
     assert result.preferences.exclude_genres == ['Thriller']
     result = parser.interpret(request('movies like Orbit House'))
-    assert result.preferences.history_items == ['102']
-    assert result.resolved_movies[0].title == 'Orbit House'
-    assert result.preference_revision == 4
+    assert result.outcome == 'applied'
+    assert result.preferences == PreferenceState()
+    assert [movie.movie_id for movie in result.resolved_movies] == ['102']
+    assert result.summary == 'Finding movies like Orbit House.'
 
 
 @pytest.mark.parametrize('text', ['funny movies with Tom Hanks', 'comedy from 1995',
@@ -33,8 +34,9 @@ def test_unsupported_clauses_do_not_partially_apply(text):
 
 def test_conflicts_unknown_and_hidden_titles_require_clarification():
     parser = CatalogInterpreter(fixture_catalog())
-    for text in ['comedy but no comedy', 'movies like not a real movie', 'not movies like Orbit House']:
+    for text in ['comedy but no comedy', 'movies like not a real movie']:
         assert parser.interpret(request(text)).outcome == 'clarification'
+    assert parser.interpret(request('not movies like Orbit House')).outcome == 'clarification'
     assert parser.interpret(request('movies like Orbit House', excluded_movie_ids=['102'])).outcome == 'clarification'
 
 
@@ -43,15 +45,21 @@ def test_ambiguous_title_year_and_reset():
                        for i, year in [(1, 1990), (2, 2000)]})
     parser = CatalogInterpreter(catalog)
     assert parser.interpret(request('movies like Example')).outcome == 'clarification'
-    assert parser.interpret(request('movies like Example (2000)')).preferences.history_items == ['2']
+    assert parser.interpret(request('movies like Example (2000)')).outcome == 'applied'
 
 
 def test_movielens_genre_and_article_title_aliases():
     movie = CatalogMovie(movie_id='2571', title='Matrix, The (1999)', genres=['Sci-Fi', 'Action'])
     parser = CatalogInterpreter(Catalog({'2571': movie}))
     assert parser.interpret(request('science fiction')).preferences.include_genres == ['Sci-Fi']
-    assert parser.interpret(request('movies like The Matrix (1999)')).preferences.history_items == ['2571']
-    assert parser.interpret(request('reset preferences', include_genres=['Drama'])).preferences == PreferenceState()
+    title = parser.interpret(request('movies like The Matrix (1999)'))
+    assert title.outcome == 'applied'
+    assert title.preferences == PreferenceState()
+    assert [item.movie_id for item in title.resolved_movies] == ['2571']
+    original = PreferenceState(history_items=['2571'], include_genres=['Drama'], ratings=[])
+    reset = parser.interpret(RefinementRequest(session_id='test', preference_revision=3,
+                                               preferences=original, text='reset preferences'))
+    assert reset.preferences == PreferenceState(history_items=['2571'], ratings=[])
 
 
 def test_api_interpretation_reaches_retrieval_and_hard_filters():
