@@ -222,3 +222,17 @@ def test_masking_is_per_viewer_and_deterministic():
     assert all(len(set(np.isnan(half[i:i + 3]))) == 1 for i in range(0, 600, 3))  # whole viewers
     assert np.array_equal(np.isnan(half), np.isnan(mask_columns(dict(table), {"user_mean_rating": .5}, 0)["user_mean_rating"]))
     assert np.isnan(mask_columns(dict(table), {"user_mean_rating": 1.0}, 0)["user_mean_rating"]).all()
+
+
+def test_popularity_variants_weight_likes_by_age():
+    from trustworthy_recsys.data.windows import Events
+    from trustworthy_recsys.ranking.popularity import popularity_scores, ranked
+    as_of = 1000 * DAY
+    events = Events(np.array([1, 2, 3, 4]), np.array([10, 10, 20, 20]), np.array([5, 4, 4.5, 3.0], dtype="float32"),
+                    np.array([as_of - 400 * DAY, as_of - 500 * DAY, as_of - 180 * DAY, as_of - DAY]))
+    scores = popularity_scores(events, {"10": 0, "20": 1}, 2, as_of, recent_days=(365,), half_lives=(180,))
+    assert scores["all_time"].tolist() == [2, 1]  # the 3.0 rating is not a like
+    assert scores["recent_365d"].tolist() == [0, 1]
+    assert scores["half_life_180d"][1] == pytest.approx(.5)
+    assert scores["half_life_180d"][0] == pytest.approx(.5 ** (400 / 180) + .5 ** (500 / 180))
+    assert ranked(scores["half_life_180d"]).tolist() == [1, 0]  # the recent like outweighs two old ones
