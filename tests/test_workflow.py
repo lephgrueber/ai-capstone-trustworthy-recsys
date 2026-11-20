@@ -114,3 +114,18 @@ def test_rotating_targets_from_all_target_inputs(run, tmp_path):
     assert towers["target_sampling"]["mode"] == "rotate"
     assert coverage["examples_processed"] <= towers["epochs"] * towers["selected_training_pairs"]
     assert coverage["distinct_viewer_movie_targets"] >= towers["selected_training_pairs"]
+
+
+def test_diagnostics_by_movie_and_viewer_groups(run, tmp_path):
+    from trustworthy_recsys.ranking.diagnostics import diagnose, format_table
+    run_stage("development", run, tmp_path / "workflow", TINY, scenario="calendar")
+    dev = tmp_path / "workflow" / "development"
+    report = diagnose(dev / "table_dev", dev / "reranker", run, k=3, scenario="calendar")
+    groups = report["groups"]
+    personalized = groups["all_personalized"]
+    assert personalized["viewers"] > 0 and 0 <= personalized["recall_at_3_reranked"] <= personalized["candidate_pool_recall"] <= 1
+    # Movie groups count only likes in the group; popularity groups partition all likes.
+    popular = groups.get("movie_popular_top10pct", {"likes": 0})["likes"] + groups.get("movie_less_popular", {"likes": 0})["likes"]
+    assert popular == personalized["likes"]
+    assert any(name.startswith("viewer_era_") for name in groups) and any(name.startswith("movie_genre_") for name in groups)
+    assert set(report["incomplete_feedback"]) == {"before", "after"} and "| all_personalized |" in format_table(report)

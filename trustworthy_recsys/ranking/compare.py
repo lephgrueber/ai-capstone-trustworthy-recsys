@@ -54,8 +54,9 @@ def scores_for(model_dir, data):
     if model_dir == PASS_THROUGH:
         return -data["retrieval_rank"].astype(float)
     features = model_features(model_dir)
+    threads = lightgbm_threads(4)  # must precede Booster creation (macOS OpenMP conflict with torch)
     booster = lgb.Booster(model_file=str(Path(model_dir) / "model.txt"))
-    return booster.predict(np.column_stack([data[name] for name in features]), num_threads=lightgbm_threads(4))
+    return booster.predict(np.column_stack([data[name] for name in features]), num_threads=threads)
 
 
 def recall_by_group(groups, labels, scores, relevant, k):
