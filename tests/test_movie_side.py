@@ -115,3 +115,42 @@ def test_metadata_towers_run_through_development(tmp_path):
         assert exported["export_as_of_utc"] == windows["final_b"]["end_utc"] and final["report"]
     finally:
         next(gen, None)
+
+
+def test_blank_metadata_is_filled_identically_in_training_and_serving(tmp_path):
+    """Feedback §5 check: blank runtime, then all optional metadata, keeping the movie ID."""
+    write_metadata(tmp_path / "meta")
+    write_tags(tmp_path)
+    config = dict(credits=True, runtime=True, tags=True)
+    training_side = side(tmp_path, **config)
+    torch.manual_seed(0)
+    model = TwoTower(np.eye(4, dtype="float32"), embedding_dim=4, side=training_side)
+    stamp = int(pd.Timestamp("2021-06-01", tz="UTC").timestamp())
+    torch.save({"config": model.config, "state_dict": model.state_dict(), "as_of": stamp}, tmp_path / "model.pt")
+
+    def blank(columns):
+        path = tmp_path / "meta" / "movie_metadata.parquet"
+        frame = pq.read_table(path).to_pandas()
+        for column in columns:
+            frame.at[0, column] = None if column == "runtime_minutes" else []
+        pq.write_table(pa.Table.from_pandas(frame, preserve_index=False), path)
+        write_json(tmp_path / "meta" / "manifest.json", {"output_sha256": hashes(path)["sha256"]})
+
+    # 1. Runtime blank for movie "1": both paths use the saved fitting median and the flag.
+    blank(["runtime_minutes"])
+    serving_side = MovieSide(training_side.config, ITEMS, training_side.vocab, training_side.runtime_scale)
+    refit_side = MovieSide(training_side.config, ITEMS, training_side.vocab, training_side.runtime_scale)
+    assert serving_side.runtime[0].tolist() == refit_side.runtime[0].tolist() == [0.0, 1.0]
+    assert serving_side.runtime_scale == training_side.runtime_scale  # saved scale, not refitted
+
+    # 2. Every optional field blank (credits, runtime; no tags for movie 3), ID kept: still scored.
+    blank(["runtime_minutes", "directors", "writers", "cast"])
+    side_all_blank = MovieSide(training_side.config, ITEMS, training_side.vocab, training_side.runtime_scale)
+    served = TwoTower(np.eye(4, dtype="float32"), embedding_dim=4, side=side_all_blank).eval()
+    served.load_state_dict(torch.load(tmp_path / "model.pt", weights_only=True)["state_dict"])
+    served.set_as_of(stamp)
+    vectors = served.all_item_vectors()
+    assert np.isfinite(vectors).all() and np.allclose(np.linalg.norm(vectors, axis=1), 1, atol=1e-5)
+    features = served.item_side(torch.tensor([0]))[0]
+    width = training_side.config.person_dim + 1
+    assert [float(features[i * width + training_side.config.person_dim]) for i in range(3)] == [1, 1, 1]
