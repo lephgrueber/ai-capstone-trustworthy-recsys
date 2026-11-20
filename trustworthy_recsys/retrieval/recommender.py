@@ -37,7 +37,7 @@ class RetrievalRecommender:
         for name,digest in read_json(root/'manifest.json')['outputs'].items():
             if hashes(root/name)['sha256']!=digest:
                 raise ValueError(f'Model artifact hash mismatch: {name}')
-        return inputs,load_model(root/'model.pt',inputs.item_features),np.load(root/'item_embeddings.npy')
+        return inputs,load_model(root/'model.pt',inputs.item_features,inputs.item_ids),np.load(root/'item_embeddings.npy')
 
     @classmethod
     def load(cls,inputs_dir,model_dir):

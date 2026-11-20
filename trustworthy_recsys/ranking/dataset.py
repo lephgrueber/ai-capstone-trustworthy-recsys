@@ -142,7 +142,6 @@ def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, 
     torch.set_num_threads(threads)
     inputs, model, vectors = RetrievalRecommender.load_verified(inputs_dir, model_dir)
     verify_run_matches_inputs(run_dir, inputs)
-    rec = RetrievalRecommender(inputs, model, ExactIndex(vectors))
     examples_path = Path(examples_path)
     window, examples = load_examples(examples_path, max_users, seed)
     tower_cutoff = int(pd.Timestamp(inputs.meta["training_cutoff_utc"]).timestamp())
@@ -152,6 +151,10 @@ def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, 
         cutoff, partitions = window["history_end"], tuple(window["partitions"])
         if cutoff < tower_cutoff:
             raise ValueError("Examples' history ends before the towers' fitting window")
+    if model.side is not None and model.side.config.tags:
+        # Tag summaries must be as of this table's own cutoff, not the saved export time.
+        vectors = model.set_as_of(cutoff).all_item_vectors()
+    rec = RetrievalRecommender(inputs, model, ExactIndex(vectors))
     load_started = time.perf_counter()
     features = RankingFeatures.from_run(
         run_dir, inputs.meta["scenario"], inputs.item_ids, inputs.item_features,

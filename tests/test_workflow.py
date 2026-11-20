@@ -18,6 +18,11 @@ TINY = {"depth": 10, "ab_ratio": 3,
 
 @pytest.fixture
 def run(tmp_path):
+    yield from synthetic_run(tmp_path)
+
+
+def synthetic_run(tmp_path):
+    """Generator: yields a completed synthetic pipeline run, then cleans up."""
     fixture = fixtures.PipelineTests()
     fixture.setUp()
     rng = np.random.default_rng(3)

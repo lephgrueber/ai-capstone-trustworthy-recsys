@@ -104,7 +104,11 @@ def selection_score(recommender,records,k,as_of=None):
 
 def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=42,
           embedding_dim=32,max_pairs=0,validation_users=0,threads=2,selection_examples=None,
-          selection_k=500,select=True,temperature=.1,history=None,dislike_penalty=0.0):
+          selection_k=500,select=True,temperature=.1,history=None,dislike_penalty=0.0,movie_side=None,
+          export_as_of=None):
+    """`movie_side`: MovieSideConfig fields (metadata/tag dirs and which inputs to use).
+    `export_as_of`: Unix seconds for the saved item vectors' tag summaries (default: the
+    end of the fitting window)."""
     """`validation_users=0` scores every selection viewer; a positive value hash-samples them."""
     if min(epochs,batch_size,threads,embedding_dim,selection_k)<=0 or validation_users<0 or batch_size<2 \
             or learning_rate<=0 or max_pairs<0 or temperature<=0:
@@ -145,7 +149,20 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
         raise ValueError('Need at least two training pairs')
     frequencies=np.bincount(inputs.target_items[selected],minlength=len(inputs.item_ids)).astype('float32')
     log_q=torch.from_numpy(np.log(np.maximum(frequencies,1)/len(selected)))
-    model=TwoTower(inputs.item_features,embedding_dim=embedding_dim,history=history_config)
+    fit_end=int(pd.Timestamp(inputs.meta['training_cutoff_utc']).timestamp())
+    export_as_of=fit_end if export_as_of is None else int(export_as_of)
+    side=None
+    if movie_side:
+        from .movie_side import MovieSide, MovieSideConfig
+        side=MovieSide(MovieSideConfig(**movie_side),inputs.item_ids)
+    model=TwoTower(inputs.item_features,embedding_dim=embedding_dim,history=history_config,side=side)
+    snapshots=None
+    if side is not None and side.config.tags:
+        # Each target (and its favorites) sees tags first used before Jan 1 of the target's year.
+        years=pd.to_datetime(np.asarray(inputs.target_times),unit='s',utc=True).year
+        stamps,stacked=side.tag_snapshots(int(years.min()),int(years.max()))
+        pad=torch.zeros(stacked.shape[0],1,stacked.shape[2])
+        snapshots=(stamps,torch.cat([stacked,pad],dim=1))
     pair_history=PairHistory(inputs,history_config) if history_config.active or dislike_penalty else None
     dense=torch.optim.AdamW(model.dense_parameters(),lr=learning_rate,weight_decay=1e-4)
     sparse=torch.optim.SparseAdam(model.sparse_parameters(),lr=learning_rate)
@@ -166,7 +183,9 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
             'validation_sha256':hashes(validation_path)['sha256'] if select else None,'torch_version':torch.__version__,
             'code':code_provenance(),'loss':'in-batch sampled softmax, empirical target-frequency logQ; historical positives and duplicate targets masked'
                     +(f'; + {dislike_penalty} x softplus((s(latest earlier dislike) - s(target)) / T)' if dislike_penalty else ''),
-            'history':asdict(history_config),'dislike_penalty':dislike_penalty}
+            'history':asdict(history_config),'dislike_penalty':dislike_penalty,
+            'movie_side':None if side is None else {**asdict(side.config),'sources':side.sources},
+            'export_as_of_utc':pd.Timestamp(export_as_of,unit='s',tz='UTC').isoformat()}
     best=-1.0
     records=[]
     started=time.perf_counter()
@@ -185,8 +204,14 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
             target_tensor=torch.from_numpy(target)
             dense.zero_grad(set_to_none=True)
             sparse.zero_grad(set_to_none=True)
-            user_vectors=model.encode_user(features,pair_history.batch(batch) if history_config.active else None)
-            target_vectors=model.encode_item(target_tensor)
+            snap=None
+            if snapshots is not None:
+                snap=torch.from_numpy(np.searchsorted(snapshots[0],np.asarray(inputs.target_times)[batch],side='right')-1)
+            history_batch_=pair_history.batch(batch) if history_config.active else None
+            if history_batch_ is not None and snap is not None and history_config.metadata:
+                history_batch_['favorite_tags']=snapshots[1][snap[:,None],history_batch_['items']]
+            user_vectors=model.encode_user(features,history_batch_)
+            target_vectors=model.encode_item(target_tensor,None if snap is None else snapshots[1][snap,target_tensor])
             logits=user_vectors @ target_vectors.T / temperature
             logits=logits-log_q[target_tensor][None,:]
             logits=logits.masked_fill(torch.from_numpy(negative_mask(inputs,batch,target)),float('-inf'))
@@ -197,7 +222,9 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
                 rows=np.flatnonzero(disliked>=0)
                 if len(rows):
                     rows_t=torch.from_numpy(rows)
-                    bad=(user_vectors[rows_t]*model.encode_item(torch.from_numpy(disliked[rows].astype(np.int64)))).sum(-1)
+                    disliked_t=torch.from_numpy(disliked[rows].astype(np.int64))
+                    bad=(user_vectors[rows_t]*model.encode_item(
+                        disliked_t,None if snap is None else snapshots[1][snap[rows_t],disliked_t])).sum(-1)
                     good=(user_vectors[rows_t]*target_vectors[rows_t]).sum(-1)
                     loss=loss+dislike_penalty*F.softplus((bad-good)/temperature).mean()
             if not torch.isfinite(loss):
@@ -210,6 +237,7 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
         train_seconds=time.perf_counter()-epoch_started
         score=None
         if select:
+            model.set_as_of(as_of)
             recommender=RetrievalRecommender(inputs,model,ExactIndex(model.all_item_vectors()))
             score=selection_score(recommender,validation,selection_k,as_of)
         result={'epoch':epoch+1,'mean_training_loss':loss_sum/trained,'pairs_seen':trained,
@@ -220,8 +248,8 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
         if not select or score>best:
             best=score if select else best
             config['selected_epoch']=epoch+1
-            torch.save({'config':model.config,'state_dict':model.state_dict()},root/'model.pt')
-    model=load_model(root/'model.pt',inputs.item_features)
+            torch.save({'config':model.config,'state_dict':model.state_dict(),'as_of':export_as_of},root/'model.pt')
+    model=load_model(root/'model.pt',inputs.item_features,inputs.item_ids,as_of=export_as_of)
     vectors=model.all_item_vectors()
     np.save(root/'item_embeddings.npy',vectors)
     config.update({'training_seconds':time.perf_counter()-started,f'best_validation_recall_at_{selection_k}':best if select else None,
@@ -252,10 +280,12 @@ def main():
     p.add_argument('--history',type=json.loads,default=None,
                    help='Viewer-tower history JSON, e.g. \'{"favorites": true, "pooling": "recency", "dislikes": true}\'')
     p.add_argument('--dislike-penalty',type=float,default=0.0)
+    p.add_argument('--movie-side',type=json.loads,default=None,
+                   help='Movie metadata JSON, e.g. \'{"metadata_dir": "...", "tags_dir": "...", "credits": true, "runtime": true, "tags": true}\'')
     a=p.parse_args()
     train(a.inputs_dir,a.output_dir,a.epochs,a.batch_size,a.learning_rate,a.seed,a.embedding_dim,a.max_pairs,
           a.validation_users,a.threads,a.selection_examples,a.selection_k,not a.no_selection,a.temperature,
-          a.history,a.dislike_penalty)
+          a.history,a.dislike_penalty,a.movie_side)
 
 
 if __name__=='__main__':

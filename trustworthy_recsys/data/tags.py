@@ -63,8 +63,9 @@ def build(run_dir, output_dir, encoder_name=DEFAULT_ENCODER, encoder=None) -> di
     tags = pq.read_table(Path(run_dir) / "tags.parquet", columns=["movie_id", "tag", "timestamp_utc"]).to_pandas()
     tags["phrase"] = tags["tag"].map(normalize)
     tags = tags[tags["phrase"] != ""]
-    tags["ts"] = tags["timestamp_utc"].astype("int64") // 10**9 if tags["timestamp_utc"].dtype.kind == "M" \
-        else pd.to_datetime(tags["timestamp_utc"], utc=True).astype("int64") // 10**9
+    # Unit-safe Unix seconds (Parquet timestamps load at millisecond resolution).
+    stamps = pd.to_datetime(tags["timestamp_utc"], utc=True)
+    tags["ts"] = ((stamps - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(seconds=1)).astype("int64")
     pairs = tags.groupby(["movie_id", "phrase"], as_index=False)["ts"].min()
     phrases = np.array(sorted(pairs["phrase"].unique()))
     phrase_id = {p: i for i, p in enumerate(phrases)}
