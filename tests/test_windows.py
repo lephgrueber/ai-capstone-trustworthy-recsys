@@ -153,3 +153,34 @@ def _shifted(tmp_path, dev, label_start):
     meta["label_start"] = label_start - 1
     path.with_suffix(".json").write_text(json.dumps(meta))
     return path
+
+
+def test_tower_sweep_summarizes_variants(tmp_path):
+    pytest.importorskip("torch")
+    import test_data_pipeline as fixtures
+    from trustworthy_recsys.data.retrieval_inputs import prepare_inputs
+    from trustworthy_recsys.data.windows import prepare
+    from trustworthy_recsys.retrieval.sweep import run
+
+    fixture = fixtures.PipelineTests()
+    fixture.setUp()
+    try:
+        rng = np.random.default_rng(0)
+        records = [(u, m, float(rng.choice([2, 4, 5])), int(day))
+                   for u in range(1, 9) for m, day in zip(rng.permutation(6)[:5] + 1, sorted(rng.choice(np.arange(1, 13), 5, replace=False)))]
+        fixture.write_ratings(sorted(records))
+        fixture.refresh_manifest()
+        run_dir = tmp_path / "run"
+        fixtures.run_pipeline(fixture.raw, run_dir, fixture.manifest, fixture.readme,
+                              explicit=("2020-01-08", "2020-01-10"), chunk_size=4, dataset_name="synthetic-test")
+        windows = prepare(run_dir, "calendar", tmp_path / "windows", ab_ratio=1, names=("dev",))
+        prepare_inputs(run_dir, "calendar", tmp_path / "inputs", 0, ("train",), windows["windows"]["train_a"]["end"])
+        rows = run(tmp_path / "inputs", tmp_path / "windows" / "dev.jsonl", tmp_path / "sweep",
+                   {"baseline": {"target_sampling": {"mode": "spaced", "cap": 4}},
+                    "rotate": {"target_sampling": {"mode": "rotate", "cap": 1}, "learning_rate": .004}},
+                   base={"epochs": 2, "batch_size": 3, "threads": 1})
+        assert [r["variant"] for r in rows] == ["baseline", "rotate"]
+        assert "| rotate |" in (tmp_path / "sweep" / "summary.md").read_text()
+        assert len(rows[1]["curve"]) == 2
+    finally:
+        fixture.doCleanups()
