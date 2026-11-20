@@ -77,8 +77,10 @@ def run(train_table, dev_table, retrieval_model_dir, variants, output_dir, refer
               for name, spec in variants.items()}
     rows = []
     for name, spec in variants.items():
+        # Each side is scored with only the values its app version could calculate.
         report = compare(dev_table, fitted[reference], fitted[name], k=k, samples=samples,
-                         availability=spec.get("availability") or variants[reference].get("availability"))
+                         availability=spec.get("availability"),
+                         availability_a=variants[reference].get("availability"))
         training = json.loads((fitted[name][0] / "training.json").read_text())
         diff = report["difference"][f"ndcg_at_{k}"]
         rows.append({"variant": name, "spec": spec, "features": len(training["features"]),

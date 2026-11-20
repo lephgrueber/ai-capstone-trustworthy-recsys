@@ -195,3 +195,18 @@ def test_ablation_runner_compares_variants_with_intervals(tmp_path):
     assert by["m3_only_seeds"]["features"] == len(GROUPS["m3"]) and len(by["m3_only_seeds"]["seed_spread"]["ndcg_at_12"]["b"]["runs"]) == 2
     assert "| no_recent |" in (tmp_path / "ablations" / "summary.md").read_text()
     assert set(dropped({"keep_groups": ["m3", "tower"]})) == set(FEATURE_NAMES) - set(GROUPS["m3"]) - set(GROUPS["tower"])
+
+
+def test_compare_masks_each_side_with_its_own_availability(tmp_path):
+    from trustworthy_recsys.ranking.compare import compare
+    write_table(tmp_path / "train_b")
+    write_table(tmp_path / "dev", seed=1)
+    for name in ("train_b", "dev"):
+        write_users(tmp_path / name)
+    train(tmp_path / "train_b", tmp_path / "m", rounds=10, threads=1, valid_table_dir=tmp_path / "dev",
+          params={"min_data_in_leaf": 5, "num_leaves": 7})
+    report = compare(tmp_path / "dev", [tmp_path / "m"], [tmp_path / "m"], samples=20,
+                     availability="favorites_only", availability_a="star_ratings")
+    assert report["missing_at_evaluation"]["a"] == [] and "user_mean_rating" in report["missing_at_evaluation"]["b"]
+    same = compare(tmp_path / "dev", [tmp_path / "m"], [tmp_path / "m"], samples=20, availability="star_ratings")
+    assert same["difference"]["ndcg_at_12"]["all"]["mean_difference"] == 0

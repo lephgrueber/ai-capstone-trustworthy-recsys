@@ -59,6 +59,17 @@ def scores_for(model_dir, data):
     return booster.predict(np.column_stack([data[name] for name in features]), num_threads=threads)
 
 
+def masked(data, hidden):
+    """Copy of the columns with unavailable rating-history values set to NaN."""
+    if not hidden:
+        return data
+    out = dict(data)
+    for name in hidden:
+        if name in out:
+            out[name] = np.full(len(out[name]), np.nan, dtype=out[name].dtype)
+    return out
+
+
 def recall_by_group(groups, labels, scores, relevant, k):
     order = np.lexsort((-scores, groups))
     g = groups[order]
@@ -88,16 +99,17 @@ def bootstrap(diff, samples, rng):
             "viewers_worse": int((diff < 0).sum())}
 
 
-def compare(table_dir, a_dirs, b_dirs, k=12, samples=2000, seed=0, output=None, availability=None):
-    """`availability`: AVAILABILITY profile name; its unavailable values are NaN for both sides."""
+def compare(table_dir, a_dirs, b_dirs, k=12, samples=2000, seed=0, output=None, availability=None,
+            availability_a=None):
+    """`availability`: AVAILABILITY profile for side B (and A unless `availability_a` is given);
+    each side sees only the rating-history values its app version could calculate."""
     a_dirs = [str(x) for x in a_dirs]
     b_dirs = [str(x) for x in b_dirs]
     features = sorted({f for d in a_dirs + b_dirs for f in model_features(d)})
     manifest, data = load_table(table_dir, features)
     hidden = AVAILABILITY[availability] if availability else ()
-    for name in hidden:
-        if name in data:
-            data[name] = np.full(len(data[name]), np.nan, dtype=data[name].dtype)
+    availability_a = availability if availability_a is None else availability_a
+    hidden_a = AVAILABILITY[availability_a] if availability_a else ()
     groups, sizes = group_ids(data["user_id"])
     starts = np.concatenate([[0], np.cumsum(sizes)[:-1]])
     relevant = data["user_relevant_count"][starts].astype(np.int64)
@@ -115,12 +127,13 @@ def compare(table_dir, a_dirs, b_dirs, k=12, samples=2000, seed=0, output=None, 
     except ValueError as error:
         if "window export" not in str(error):
             raise
-    runs = {"a": per_viewer(a_dirs, data, groups, relevant, k, graded),
-            "b": per_viewer(b_dirs, data, groups, relevant, k, graded)}
+    runs = {"a": per_viewer(a_dirs, masked(data, hidden_a), groups, relevant, k, graded),
+            "b": per_viewer(b_dirs, masked(data, hidden), groups, relevant, k, graded)}
     rng = np.random.default_rng(seed)
     report = {"table": str(table_dir), "table_rows_sha256": manifest["rows_sha256"], "k": k,
               "a": a_dirs, "b": b_dirs, "bootstrap_samples": samples,
-              "availability": availability, "missing_at_evaluation": list(hidden),
+              "availability": {"a": availability_a, "b": availability},
+              "missing_at_evaluation": {"a": list(hidden_a), "b": list(hidden)},
               "method": "per-viewer B minus A, viewers resampled with replacement; seed repeats averaged per viewer",
               "scores": {}, "difference": {}, "seed_spread": {}}
     for metric in ("ndcg", "recall", "graded_ndcg"):
