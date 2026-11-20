@@ -103,11 +103,11 @@ def _load_runtime(
                     raise ValueError(
                         f"learned catalog metadata is missing {len(missing)} model movie IDs"
                     )
+                inputs = retrieval.recommender.inputs
                 catalog = Catalog(
-                    {
-                        movie_id: full_catalog.movies[movie_id]
-                        for movie_id in retrieval.recommender.inputs.item_ids
-                    }
+                    {movie_id: full_catalog.movies[movie_id] for movie_id in inputs.item_ids},
+                    popularity=dict(zip(inputs.item_ids, map(float, getattr(inputs, "positive_counts", None))))
+                    if getattr(inputs, "positive_counts", None) is not None else None,
                 )
                 links_path = settings.run_dir / "links.parquet"
                 if settings.reranker_model_dir is not None:

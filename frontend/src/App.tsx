@@ -123,11 +123,18 @@ function MovieCarousel({ ariaLabel, items, artwork, favoriteIds, reducedMotion, 
   })}</div><button className="edge-arrow next" aria-label={`Next ${ariaLabel}`} disabled={!edges.next} onClick={() => scroll(1)}><ChevronRight /></button></div></div>;
 }
 
+export function filterGenres(genres: string[], filter: string): string[] {
+  const needle = filter.trim().toLocaleLowerCase();
+  return needle ? genres.filter((genre) => genre.toLocaleLowerCase().includes(needle)) : genres;
+}
+
 function GenreChoices({ kind, genres, selected, blocked, onToggle }: { kind: "include" | "avoid"; genres: string[]; selected: string[]; blocked: string[]; onToggle: (genre: string, kind: "include" | "avoid") => void }) {
-  return <div className="genre-dialog-options">{genres.map((genre) => {
+  const [filter, setFilter] = useState("");
+  const visible = filterGenres(genres, filter);
+  return <><input className="genre-filter" type="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Type to narrow genres" aria-label={`Filter ${kind === "include" ? "include" : "avoid"} genres`} autoFocus /><div className="genre-dialog-options">{visible.map((genre) => {
     const active = selected.includes(genre); const disabled = blocked.includes(genre);
     return <button type="button" key={genre} aria-pressed={active} disabled={disabled} title={disabled ? `Remove ${genre} from ${kind === "include" ? "Avoid" : "Include"} first` : undefined} onClick={() => onToggle(genre, kind)} className={`genre-option ${kind} ${active ? "active" : ""}`}><span className="genre-check" aria-hidden="true">{active ? (kind === "include" ? <Check size={14} /> : <Ban size={14} />) : null}</span>{genre}</button>;
-  })}</div>;
+  })}{!visible.length && <p className="genre-filter-empty">No genres match “{filter}”.</p>}</div></>;
 }
 
 export function App() {

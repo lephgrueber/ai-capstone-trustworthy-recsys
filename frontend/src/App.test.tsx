@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { App, formatCatalogTitle } from "./App";
+import { App, filterGenres, formatCatalogTitle } from "./App";
 import type { PreferenceState } from "./api/client";
 import { PROFILE_STORAGE_KEY } from "./profile";
 
@@ -503,5 +503,15 @@ describe("browser rating workflow", () => {
   it("formats catalog articles and years", () => {
     expect(formatCatalogTitle("Princess Bride, The (1987)")).toEqual({ title: "The Princess Bride", year: "1987" });
     expect(formatCatalogTitle("A Very Long, Uncertain Title (2004)")).toEqual({ title: "A Very Long, Uncertain Title", year: "2004" });
+  });
+});
+
+
+describe("genre filter", () => {
+  it("narrows genres case-insensitively and keeps all for an empty filter", () => {
+    const genres = ["Comedy", "Crime", "Documentary", "Drama"];
+    expect(filterGenres(genres, "  cr ")).toEqual(["Crime"]);
+    expect(filterGenres(genres, "DR")).toEqual(["Drama"]);
+    expect(filterGenres(genres, "")).toEqual(genres);
   });
 });

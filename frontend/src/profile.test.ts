@@ -43,3 +43,4 @@ describe("browser rating profile", () => {
     expect(loaded.warning).toBe("Browser storage is unavailable or unreadable. Ratings cannot be saved until storage is available.");
   });
 });
+
