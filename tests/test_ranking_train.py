@@ -143,3 +143,24 @@ def test_rounds_selected_on_dev_and_fixed_rounds(tmp_path):
     groups = np.array([0, 0, 0, 1, 1])
     out = ndcg_by_group(groups, np.array([0, 1, 0, 0, 0.]), np.array([.9, .5, .1, 1, 0]), np.array([2, 1]), 2)
     assert out[0] == pytest.approx(ndcg_at_k({"b", "z"}, ["a", "b", "c"], 2)) and out[1] == 0
+
+
+def test_paired_comparison_of_feature_variants(tmp_path):
+    from trustworthy_recsys.ranking.compare import compare
+    write_table(tmp_path / "train_b")
+    write_table(tmp_path / "dev", seed=1)
+    for name in ("train_b", "dev"):
+        write_users(tmp_path / name)
+    common = dict(rounds=20, threads=1, valid_table_dir=tmp_path / "dev", params={"min_data_in_leaf": 5, "num_leaves": 7})
+    train(tmp_path / "train_b", tmp_path / "with", **common)
+    train(tmp_path / "train_b", tmp_path / "without", drop_features=["recent_cosine_max"], **common)
+    train(tmp_path / "train_b", tmp_path / "with_seed2", seed=2, **common)
+    report = compare(tmp_path / "dev", [tmp_path / "without"], [tmp_path / "with", tmp_path / "with_seed2"],
+                     k=12, samples=200, output=tmp_path / "cmp.json")
+    gain = report["difference"]["ndcg_at_12"]["all"]
+    # The informative feature helps, and the interval is around the observed mean.
+    assert gain["mean_difference"] > 0 and gain["ci95"][0] <= gain["mean_difference"] <= gain["ci95"][1]
+    assert gain["viewers"] == 60 and set(report["difference"]["ndcg_at_12"]) >= {"all", "history_0"}
+    assert len(report["seed_spread"]["ndcg_at_12"]["b"]["runs"]) == 2
+    baseline = compare(tmp_path / "dev", ["pass_through"], [tmp_path / "with"], samples=50)
+    assert baseline["scores"]["recall_at_12"]["a"] >= 0
