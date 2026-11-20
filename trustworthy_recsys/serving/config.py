@@ -53,8 +53,9 @@ class Settings:
             budget = int(os.getenv("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET", default_budget))
         except ValueError as error:
             raise ValueError("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET must be an integer") from error
-        if not 10 <= budget <= 500:
-            raise ValueError("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET must be between 10 and 500")
+        # Up to 1,000 so a deeper retrieval depth chosen on dev (feedback §7) can be served.
+        if not 10 <= budget <= 1000:
+            raise ValueError("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET must be between 10 and 1000")
         return cls(
             feedback_mode=os.getenv('TRUSTWORTHY_RECSYS_FEEDBACK_MODE', 'off'),
             feedback_db=Path(os.getenv('TRUSTWORTHY_RECSYS_FEEDBACK_DB', 'data/feedback/movie.sqlite3')),

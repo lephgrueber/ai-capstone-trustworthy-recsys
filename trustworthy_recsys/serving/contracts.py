@@ -143,7 +143,7 @@ class ScoredMovie(StrictModel):
 
 
 class CandidateBatch(StrictModel):
-    candidates: list[ScoredMovie] = Field(max_length=500)
+    candidates: list[ScoredMovie] = Field(max_length=1000)
     component: ComponentInfo
     warnings: list[str] = Field(default_factory=list, max_length=20)
 

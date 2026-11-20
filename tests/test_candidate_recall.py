@@ -49,3 +49,26 @@ def test_recall_grows_with_depth_and_splits_paths():
 def test_rejects_nonpositive_depths():
     with pytest.raises(ValueError):
         measure(StubRecommender(), [], [0, 10])
+
+
+def test_window_recall_with_genre_filter_and_exclusions():
+    from types import SimpleNamespace
+    from trustworthy_recsys.retrieval.candidate_recall import measure_window
+
+    class Stub:
+        inputs = SimpleNamespace(item_ids=["a", "b", "c", "d"])
+
+        def recommend_indices(self, request, k):
+            assert request.exclude_items == ("z",) and request.as_of == 100
+            return [0, 1, 2, 3][:k], False
+
+    record = {"user_id": "1", "history_items": ["h"], "other_rated_items": ["z"], "other_rated_ratings": [3.0],
+              "relevant_items": ["b", "d", "missed"]}
+    genres = {"a": {"Comedy"}, "b": {"Comedy"}, "c": {"Drama"}, "d": {"Drama"}, "missed": {"Comedy"}}
+    result = measure_window(Stub(), [record], [2, 4], 100, genres, ["Comedy"])
+    overall = result["metrics"]["two_tower/all"]
+    assert overall["recall_at_2"] == 1 / 3 and overall["recall_at_4"] == 2 / 3  # full denominator
+    comedy = result["metrics"]["two_tower/genre_Comedy"]
+    # Later comedy likes: b (retrieved) and 'missed' -> half remain after the filter.
+    assert comedy["recall_at_4"] == .5 and comedy["users"] == 1
+    assert set(result["exact_search_latency_ms_by_depth"]) == {"2", "4"}
