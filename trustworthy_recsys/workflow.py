@@ -32,7 +32,8 @@ DEFAULT_SETTINGS = {
     "dislike_threshold": 2.0,
     "tower": {"max_targets_per_user": 4, "epochs": 8, "batch_size": 256, "learning_rate": 0.002,
               "embedding_dim": 32, "temperature": 0.1, "seed": 42, "threads": 4,
-              "history": {}, "dislike_penalty": 0.0, "movie_side": {}, "five_star_weight": None},
+              "history": {}, "dislike_penalty": 0.0, "movie_side": {}, "five_star_weight": None,
+              "target_sampling": None},
     "reranker": {"rounds": 1000, "display_k": 12, "drop_features": [], "params": {}, "seed": 42, "threads": 6,
                  "mask_features": {},
                  "metadata_dir": None, "tags_dir": None},
@@ -113,6 +114,7 @@ def run_stage(stage, run_dir, root, settings=None, scenario="ratio_80_10_10", wi
                      temperature=tower["temperature"], select=select,
                      history=tower["history"] or None, dislike_penalty=tower["dislike_penalty"],
                      movie_side=tower["movie_side"] or None, five_star_weight=tower.get("five_star_weight"),
+                     target_sampling=tower.get("target_sampling"),
                      # Final/deployment vectors use everything fitted on (end of the B window).
                      export_as_of=None if select else windows["windows"][b_name]["end"],
                      selection_examples=windows_dir / "dev.jsonl" if select else None)

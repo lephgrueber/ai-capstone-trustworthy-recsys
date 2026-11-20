@@ -98,6 +98,55 @@ class PairHistory:
         return np.where(has,np.asarray(self.inputs.negative_items)[np.maximum(self.neg_end[pairs]-1,0)] if len(self.inputs.negative_items) else -1,-1)
 
 
+SAMPLING_MODES = ("all", "spaced", "fixed", "rotate")
+
+
+class TargetSampler:
+    """Per-epoch training targets drawn from all-target inputs (feedback §6).
+
+    all: every stored pair. spaced: up to `cap` evenly spaced targets per viewer (M3's
+    rule), the same every epoch. fixed: one random draw without repeats, reused every
+    epoch. rotate: the same first draw as `fixed`, then a fresh draw each later epoch.
+    """
+
+    def __init__(self, pair_users, cap=0, mode="all", seed=0):
+        if mode not in SAMPLING_MODES:
+            raise ValueError(f"mode must be one of {SAMPLING_MODES}")
+        if mode != "all" and cap <= 0:
+            raise ValueError("cap must be positive for spaced, fixed or rotate sampling")
+        self.users = np.asarray(pair_users, dtype=np.int64)
+        if len(self.users) and (np.diff(self.users) < 0).any():
+            raise ValueError("Pairs must be grouped by viewer")
+        self.mode, self.cap, self.seed = mode, cap, seed
+        _, self.starts, self.counts = np.unique(self.users, return_index=True, return_counts=True)
+        self.rank = np.arange(len(self.users)) - np.repeat(self.starts, self.counts)
+        self.n_user = np.repeat(self.counts, self.counts)
+
+    def epoch(self, epoch):
+        if self.mode == "all":
+            return np.arange(len(self.users))
+        if self.mode == "spaced":
+            # Evenly spaced positions among each viewer's pairs (same as np.linspace per viewer).
+            take = np.minimum(self.counts, self.cap)
+            keep = np.zeros(len(self.users), dtype=bool)
+            for start, n, k in zip(self.starts, self.counts, take):
+                keep[start + np.unique(np.linspace(0, n - 1, k, dtype=int))] = True
+            return np.flatnonzero(keep)
+        draw = 0 if self.mode == "fixed" else epoch
+        keys = np.random.default_rng([self.seed, draw]).random(len(self.users))
+        order = np.lexsort((keys, self.users))
+        rank = np.empty(len(order), dtype=np.int64)
+        rank[order] = self.rank
+        return np.flatnonzero(rank < self.cap)
+
+    def expected_frequency(self, targets, n_items, epochs):
+        """Expected per-epoch draws of each movie (rotate); empirical counts otherwise."""
+        if self.mode == "rotate":
+            weight = np.minimum(self.n_user, self.cap) / self.n_user
+            return np.bincount(targets, weights=weight, minlength=n_items)
+        return np.bincount(targets[self.epoch(0)], minlength=n_items).astype("float64")
+
+
 def target_ratings(inputs):
     """Star rating of each training pair's target, looked up in the viewer's positives."""
     if not inputs.has_preference_history:
@@ -121,7 +170,7 @@ def selection_score(recommender,records,k,as_of=None,dislike_threshold=2.0):
 def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=42,
           embedding_dim=32,max_pairs=0,validation_users=0,threads=2,selection_examples=None,
           selection_k=500,select=True,temperature=.1,history=None,dislike_penalty=0.0,movie_side=None,
-          export_as_of=None,five_star_weight=None):
+          export_as_of=None,five_star_weight=None,target_sampling=None):
     """`movie_side`: MovieSideConfig fields (metadata/tag dirs and which inputs to use).
     `export_as_of`: Unix seconds for the saved item vectors' tag summaries (default: the
     end of the fitting window)."""
@@ -160,11 +209,19 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
             raise ValueError('No dev examples available for checkpoint selection')
     n=len(inputs.target_items)
     rng=np.random.default_rng(seed)
-    selected=np.sort(rng.choice(n,size=min(max_pairs,n),replace=False)) if max_pairs else np.arange(n)
+    sampler=TargetSampler(inputs.pair_users,**(target_sampling or {}))
+    selected=sampler.epoch(0)
+    if max_pairs:
+        selected=np.sort(rng.choice(selected,size=min(max_pairs,len(selected)),replace=False))
     if len(selected)<2:
         raise ValueError('Need at least two training pairs')
-    frequencies=np.bincount(inputs.target_items[selected],minlength=len(inputs.item_ids)).astype('float32')
-    log_q=torch.from_numpy(np.log(np.maximum(frequencies,1)/len(selected)))
+    if sampler.mode=='rotate' and not max_pairs:
+        # Redrawn targets: correct by how often each movie is expected to be drawn per epoch.
+        frequencies=sampler.expected_frequency(np.asarray(inputs.target_items),len(inputs.item_ids),epochs)
+    else:
+        frequencies=np.bincount(inputs.target_items[selected],minlength=len(inputs.item_ids)).astype('float64')
+    log_q=torch.from_numpy(np.log(np.maximum(frequencies,1e-3)/frequencies.sum()).astype('float32'))
+    seen_pairs=np.zeros(n,dtype=bool)
     fit_end=int(pd.Timestamp(inputs.meta['training_cutoff_utc']).timestamp())
     export_as_of=fit_end if export_as_of is None else int(export_as_of)
     side=None
@@ -194,6 +251,7 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
     config={'architecture':model.config,'epochs':epochs,'batch_size':batch_size,'learning_rate':learning_rate,
             'seed':seed,'threads':threads,'device':'cpu','temperature':temperature,'log_q_correction':True,
             'available_training_pairs':n,'selected_training_pairs':len(selected),'max_pairs':max_pairs,
+            'target_sampling':{'mode':sampler.mode,'cap':sampler.cap,'seed':sampler.seed},
             'validation_population':str(validation_path) if select else None,
             'validation_users':len(validation),'validation_sampled':bool(validation_users),
             'selection_metric':f'macro Recall@{selection_k} over every selection viewer' if select and not validation_users
@@ -211,6 +269,9 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
     started=time.perf_counter()
     for epoch in range(epochs):
         model.train()
+        if epoch and sampler.mode=='rotate' and not max_pairs:
+            selected=sampler.epoch(epoch)
+        seen_pairs[selected]=True
         order=rng.permutation(selected)
         loss_sum=0.0
         trained=0
@@ -276,6 +337,9 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
     model=load_model(root/'model.pt',inputs.item_features,inputs.item_ids,as_of=export_as_of)
     vectors=model.all_item_vectors()
     np.save(root/'item_embeddings.npy',vectors)
+    config['target_coverage']={'examples_processed':int(sum(r['pairs_seen'] for r in records)),
+                               'distinct_viewer_movie_targets':int(seen_pairs.sum()),
+                               'distinct_target_movies':int(len(np.unique(np.asarray(inputs.target_items)[seen_pairs])))}
     config.update({'training_seconds':time.perf_counter()-started,f'best_validation_recall_at_{selection_k}':best if select else None,
                    'epochs_log':records,'index':{'kind':'not yet published; run retrieval.publish'},
                    'checkpoint_search':'exact NumPy cosine; production retrieval uses Weaviate'})
@@ -305,12 +369,14 @@ def main():
                    help='Viewer-tower history JSON, e.g. \'{"favorites": true, "pooling": "recency", "dislikes": true}\'')
     p.add_argument('--dislike-penalty',type=float,default=0.0)
     p.add_argument('--five-star-weight',type=float,help='Loss weight of five-star targets (other likes = 1)')
+    p.add_argument('--target-sampling',type=json.loads,default=None,
+                   help='With all-target inputs: \'{"mode": "rotate", "cap": 8, "seed": 0}\' (modes: all, spaced, fixed, rotate)')
     p.add_argument('--movie-side',type=json.loads,default=None,
                    help='Movie metadata JSON, e.g. \'{"metadata_dir": "...", "tags_dir": "...", "credits": true, "runtime": true, "tags": true}\'')
     a=p.parse_args()
     train(a.inputs_dir,a.output_dir,a.epochs,a.batch_size,a.learning_rate,a.seed,a.embedding_dim,a.max_pairs,
           a.validation_users,a.threads,a.selection_examples,a.selection_k,not a.no_selection,a.temperature,
-          a.history,a.dislike_penalty,a.movie_side,None,a.five_star_weight)
+          a.history,a.dislike_penalty,a.movie_side,None,a.five_star_weight,a.target_sampling)
 
 
 if __name__=='__main__':

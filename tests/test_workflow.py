@@ -103,3 +103,14 @@ def test_dislike_threshold_flows_to_inputs_and_tables(run, tmp_path):
     inputs = json.loads((tmp_path / "workflow" / "development" / "inputs_a" / "metadata.json").read_text())
     table = json.loads((tmp_path / "workflow" / "development" / "table_dev" / "manifest.json").read_text())
     assert inputs["dislike_threshold"] == table["dislike_threshold"] == 2.5
+
+
+def test_rotating_targets_from_all_target_inputs(run, tmp_path):
+    settings = json.loads(json.dumps(TINY))
+    settings["tower"].update({"max_targets_per_user": 0, "target_sampling": {"mode": "rotate", "cap": 1, "seed": 0}})
+    run_stage("development", run, tmp_path / "workflow", settings, scenario="calendar")
+    towers = json.loads((tmp_path / "workflow" / "development" / "towers" / "training.json").read_text())
+    coverage = towers["target_coverage"]
+    assert towers["target_sampling"]["mode"] == "rotate"
+    assert coverage["examples_processed"] <= towers["epochs"] * towers["selected_training_pairs"]
+    assert coverage["distinct_viewer_movie_targets"] >= towers["selected_training_pairs"]
