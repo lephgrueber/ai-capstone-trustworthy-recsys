@@ -19,6 +19,8 @@ include = ["trustworthy_recsys*", "eval*"]
 [project.optional-dependencies]
 retrieval = ["torch>=2.10,<2.11", "weaviate-client==4.23.1"]
 rank = ["lightgbm>=4.5,<5", "scipy>=1.11,<2"]
+# Local tag-phrase encoder (M3 feedback §4); never required for the core pipeline.
+tags = ["sentence-transformers>=6,<7"]
 dev = [
     "pytest>=8.0",
 ]
