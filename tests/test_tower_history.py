@@ -76,3 +76,17 @@ def test_request_from_record_uses_inputs_only():
     request = request_from_record(record, as_of=10)
     assert request.disliked_items == ("b",) and request.exclude_items == ("b", "c")
     assert "d" not in request.history_items + list(request.exclude_items)
+
+
+def test_interest_groups_separate_distinct_genres():
+    config = HistoryConfig(favorites=True, interests=2)
+    features = np.array([[1, 0], [1, 0], [0, 1], [0, 1]], dtype="float32")
+    model = TwoTower(features, history=config)
+    batch = history_batch(config, 4, [[0, 2, 1, 3]], [[4, 4, 4, 4]], [[0, 0, 0, 0]], [0], [[]])
+    groups = model.interest_groups(batch)[0, :4]
+    # Movies 0/1 (first genre) and 2/3 (second genre) land in different interests.
+    assert groups[0].argmax() == groups[2].argmax() and groups[1].argmax() == groups[3].argmax()
+    assert groups[0].argmax() != groups[1].argmax()
+    single = history_batch(config, 4, [[0]], [[4]], [[0]], [0], [[]])
+    out = model.encode_user(torch.zeros(1, 3), single)
+    assert torch.isfinite(out).all()

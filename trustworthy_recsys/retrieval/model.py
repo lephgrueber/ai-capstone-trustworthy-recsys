@@ -15,6 +15,9 @@ are indistinguishable. Optional history inputs add:
   has age 0; without a known rating it counts as 4.0 (an explicit like).
 - ``dislikes``: a separate mean of learned disliked-movie embeddings, the mean genre
   weights of those movies and a 0/1 flag for whether any exist.
+- ``interests``: k > 0 also groups favorites into k interests by k-means over their fixed
+  genre vectors and feeds each group's pooled favorite vector (groups ordered by total
+  weight; an empty group is a zero vector), so distinct tastes are not averaged together.
 - ``metadata``: the favorites' credit, runtime and tag summaries from the movie side,
   pooled with the same favorite weights (requires ``favorites`` and a movie side).
 
@@ -46,10 +49,13 @@ class HistoryConfig:
     half_life_days: float = 365.0
     history_dim: int = 16
     metadata: bool = False
+    interests: int = 0
 
     def __post_init__(self):
-        if self.metadata and not self.favorites:
-            raise ValueError("metadata pooling needs favorites=True")
+        if (self.metadata or self.interests) and not self.favorites:
+            raise ValueError("metadata pooling and interests need favorites=True")
+        if self.interests < 0:
+            raise ValueError("interests must be non-negative")
         if self.pooling not in POOLINGS:
             raise ValueError(f"pooling must be one of {POOLINGS}")
         if min(self.max_history, self.max_dislikes, self.history_dim) <= 0 or self.half_life_days <= 0:
@@ -140,7 +146,7 @@ class TwoTower(nn.Module):
                 self.history_identity.weight[len(features)].zero_()
             self.register_buffer('padded_features', torch.cat([features, torch.zeros(1, features.shape[1])]))
         if h.favorites:
-            extra += h.history_dim
+            extra += h.history_dim * (1 + h.interests)
             if h.pooling == 'learned':
                 self.pool_weights = nn.Linear(2, 1)
                 nn.init.zeros_(self.pool_weights.weight)
@@ -205,11 +211,37 @@ class TwoTower(nn.Module):
             weights = torch.softmax(logits.masked_fill(~batch['mask'], -1e9), dim=-1) * mask
         return weights / weights.sum(-1, keepdim=True).clamp(min=1e-9)
 
+    @torch.no_grad()
+    def interest_groups(self, batch, iterations=5):
+        """[B, H, k] one-hot k-means assignment of favorites by genre vector."""
+        k = self.history.interests
+        genres = self.padded_features[batch['items']]
+        mask = batch['mask']
+        lengths = mask.sum(1)
+        # Seeds: the most recent favorite, then evenly spaced earlier ones.
+        idx = torch.stack([((lengths - 1).clamp(min=0) * (k - j) // k) for j in range(k)], dim=1)
+        centers = torch.gather(genres, 1, idx.unsqueeze(-1).expand(-1, -1, genres.shape[-1]))
+        for _ in range(iterations):
+            distance = torch.cdist(genres, centers)
+            assign = F.one_hot(distance.argmin(-1), k).float() * mask.unsqueeze(-1)
+            totals = assign.sum(1)
+            centers = torch.where(totals.unsqueeze(-1) > 0,
+                                  assign.transpose(1, 2) @ genres / totals.clamp(min=1).unsqueeze(-1), centers)
+        return assign
+
     def history_inputs(self, batch):
         parts = []
         if self.history.favorites:
             weights = self.favorite_weights(batch)
-            parts.append((self.history_identity(batch['items']) * weights.unsqueeze(-1)).sum(1))
+            vectors = self.history_identity(batch['items'])
+            parts.append((vectors * weights.unsqueeze(-1)).sum(1))
+            if self.history.interests:
+                groups = self.interest_groups(batch) * weights.unsqueeze(-1)       # [B, H, k]
+                totals = groups.sum(1)                                                # [B, k]
+                pooled = groups.transpose(1, 2) @ vectors / totals.clamp(min=1e-9).unsqueeze(-1)
+                order = totals.argsort(dim=1, descending=True)
+                pooled = torch.gather(pooled, 1, order.unsqueeze(-1).expand(-1, -1, pooled.shape[-1]))
+                parts.append(pooled.flatten(1))
             if self.history.metadata:
                 side = self.item_side(batch['items'], batch.get('favorite_tags'))
                 parts.append((side * weights.unsqueeze(-1)).sum(1))
