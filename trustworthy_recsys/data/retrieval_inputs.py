@@ -52,7 +52,7 @@ def grouped_window(events):
 
 
 def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4,
-                   partitions=("train",), window_end=None):
+                   partitions=("train",), window_end=None, dislike_threshold=2.0):
     """Prepare tower inputs from the training partition, or from a chronological window.
 
     With the defaults the inputs cover the whole pre-validation training partition (M3).
@@ -145,8 +145,12 @@ def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4,
             "pair_users",
             "context_ends",
             "target_times",
+            "positive_ratings",
+            "negative_items",
+            "negative_times",
         )
     }
+    negative_offsets = [0]
     try:
         source_users = (
             grouped_window(events_table)
@@ -171,7 +175,7 @@ def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4,
             offsets.append(offsets[-1] + len(seen))
             np.add.at(all_counts, seen, 1)
             positive = sorted(
-                (stamp, int(item), mapping[item])
+                (stamp, int(item), mapping[item], rating)
                 for item, rating, stamp in events
                 if rating >= threshold
             )
@@ -179,6 +183,21 @@ def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4,
             times = np.array([x[0] for x in positive], dtype="int64")
             ids.tofile(handles["positive_items"])
             times.tofile(handles["positive_times"])
+            np.array([x[3] for x in positive], dtype="float32").tofile(
+                handles["positive_ratings"]
+            )
+            negative = sorted(
+                (stamp, int(item), mapping[item])
+                for item, rating, stamp in events
+                if rating <= dislike_threshold
+            )
+            np.array([x[2] for x in negative], dtype="int32").tofile(
+                handles["negative_items"]
+            )
+            np.array([x[0] for x in negative], dtype="int64").tofile(
+                handles["negative_times"]
+            )
+            negative_offsets.append(negative_offsets[-1] + len(negative))
             np.add.at(positive_counts, ids, 1)
             starts = np.searchsorted(times, times, side="left")
             eligible = np.flatnonzero(starts > 0)
@@ -246,12 +265,16 @@ def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4,
     np.save(
         out / "positive_offsets.npy", np.array(positive_offsets, dtype="int64")
     )
+    np.save(
+        out / "negative_offsets.npy", np.array(negative_offsets, dtype="int64")
+    )
     np.save(out / "item_counts.npy", all_counts)
     np.save(out / "positive_counts.npy", positive_counts)
     write_json(out / "item_ids.json", item_ids)
     write_json(out / "user_ids.json", user_ids)
     metadata = {
-        "version": "1.0",
+        "version": "1.1",
+        "dislike_threshold": dislike_threshold,
         "source_run": str(run),
         "scenario": scenario,
         "source_hashes": source_hashes,
@@ -310,6 +333,18 @@ def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4,
         "positive_items.bin": {
             "dtype": "int32",
             "meaning": "chronological positive item indices, CSR via positive_offsets.npy",
+        },
+        "positive_ratings.bin": {
+            "dtype": "float32",
+            "meaning": "star rating aligned with positive_items.bin",
+        },
+        "negative_items.bin": {
+            "dtype": "int32",
+            "meaning": "chronological disliked item indices (rating <= dislike_threshold), CSR via negative_offsets.npy",
+        },
+        "negative_times.bin": {
+            "dtype": "int64",
+            "meaning": "disliked Unix seconds aligned with negative_items.bin",
         },
         "positive_times.bin": {
             "dtype": "int64",
@@ -424,6 +459,14 @@ class ModelInputs:
                 name,
                 np.memmap(self.path / f"{name}.bin", dtype=dtype, mode="r"),
             )
+        # Inputs version 1.1+: favorite ratings and dislike histories (feedback §2).
+        self.has_preference_history = (self.path / "positive_ratings.bin").exists()
+        if self.has_preference_history:
+            self.negative_offsets = np.load(self.path / "negative_offsets.npy", mmap_mode="r")
+            for name, dtype in [("positive_ratings", "float32"), ("negative_items", "int32"),
+                                ("negative_times", "int64")]:
+                setattr(self, name, np.memmap(self.path / f"{name}.bin", dtype=dtype, mode="r")
+                        if (self.path / f"{name}.bin").stat().st_size else np.zeros(0, dtype=dtype))
         self.query_features = np.memmap(
             self.path / "query_features.bin",
             dtype="float32",

@@ -66,3 +66,13 @@ def test_stages_lock_settings_and_use_their_windows(run, tmp_path):
     assert deployment["report"] is None
     package = json.loads((root / "deployment" / "pipeline.json").read_text())
     assert package["evaluation"].startswith("none") and "towers/model.pt" in package["files_sha256"]
+
+
+def test_history_aware_towers_run_through_development(run, tmp_path):
+    settings = json.loads(json.dumps(TINY))
+    settings["tower"].update({"history": {"favorites": True, "pooling": "learned", "dislikes": True},
+                              "dislike_penalty": 0.5})
+    result = run_stage("development", run, tmp_path / "workflow", settings, scenario="calendar")
+    towers = json.loads((tmp_path / "workflow" / "development" / "towers" / "training.json").read_text())
+    assert towers["architecture"]["history"]["pooling"] == "learned" and "softplus" in towers["loss"]
+    assert result["report"]["lambdarank/all"] >= 0

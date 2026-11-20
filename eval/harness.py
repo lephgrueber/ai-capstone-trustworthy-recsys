@@ -41,6 +41,12 @@ class RecommendationRequest:
     history_items: list[str]
     # Other movies the viewer already rated (any value); recommenders exclude them.
     exclude_items: tuple[str, ...] = ()
+    # Optional context aligned with history_items (None/NaN when unknown) and explicit
+    # dislikes, used by history-aware viewer towers; as_of is the prediction time (Unix s).
+    history_ratings: tuple[float, ...] = ()
+    history_times: tuple[float, ...] = ()
+    disliked_items: tuple[str, ...] = ()
+    as_of: float | None = None
 
 
 @dataclass(frozen=True)

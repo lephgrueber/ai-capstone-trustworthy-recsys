@@ -28,7 +28,8 @@ DEFAULT_SETTINGS = {
     "ab_ratio": 7.0,
     "depth": 500,
     "tower": {"max_targets_per_user": 4, "epochs": 8, "batch_size": 256, "learning_rate": 0.002,
-              "embedding_dim": 32, "temperature": 0.1, "seed": 42, "threads": 4},
+              "embedding_dim": 32, "temperature": 0.1, "seed": 42, "threads": 4,
+              "history": {}, "dislike_penalty": 0.0},
     "reranker": {"rounds": 1000, "display_k": 12, "drop_features": [], "params": {}, "seed": 42},
 }
 
@@ -94,6 +95,7 @@ def run_stage(stage, run_dir, root, settings=None, scenario="ratio_80_10_10", wi
                      batch_size=tower["batch_size"], learning_rate=tower["learning_rate"], seed=tower["seed"],
                      embedding_dim=tower["embedding_dim"], threads=tower["threads"],
                      temperature=tower["temperature"], select=select,
+                     history=tower["history"] or None, dislike_penalty=tower["dislike_penalty"],
                      selection_examples=windows_dir / "dev.jsonl" if select else None)
     tables = {}
     for name in (b_name, eval_name):

@@ -30,7 +30,7 @@ from eval.harness import EvalExample, RecommendationRequest, load_evaluation_exa
 from trustworthy_recsys.data.reporting import code_provenance, hashes, write_json
 from trustworthy_recsys.data.windows import history_bucket, load_records, read_window_meta
 from trustworthy_recsys.retrieval.index import ExactIndex
-from trustworthy_recsys.retrieval.recommender import RetrievalRecommender
+from trustworthy_recsys.retrieval.recommender import RetrievalRecommender, request_from_record
 from trustworthy_recsys.retrieval.train import sampled_examples
 from .features import FEATURE_NAMES, RankingFeatures
 
@@ -61,14 +61,15 @@ def popularity_order(features):
     return np.lexsort((np.arange(len(counts)), -counts))
 
 
-def build_rows(rec, features, examples, depth, progress_every=1000, popularity=None):
+def build_rows(rec, features, examples, depth, progress_every=1000, popularity=None, as_of=None):
     """Yield per-viewer column blocks; labels are only read after features are built."""
     started = time.perf_counter()
     for count, example in enumerate(examples, start=1):
         user_id = _field(example, "user_id")
         history = list(_field(example, "history_items"))
         exclude = tuple(_field(example, "other_rated_items"))
-        request = RecommendationRequest(user_id, history, exclude)
+        request = (request_from_record(example, as_of) if isinstance(example, dict)
+                   else RecommendationRequest(user_id, history, exclude, as_of=as_of))
         indices, scores, fallback = rec.recommend_scored(request, depth)
         matrix = features.build(history, indices, scores, user_id)
         movie_ids = [rec.inputs.item_ids[index] for index in indices]
@@ -159,7 +160,7 @@ def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, 
     out.mkdir(parents=True)
     (out / "INCOMPLETE").write_text("Reranker table build in progress.\n")
     started = time.perf_counter()
-    blocks = list(build_rows(rec, features, examples, depth, popularity=popularity_order(features)))
+    blocks = list(build_rows(rec, features, examples, depth, popularity=popularity_order(features), as_of=cutoff))
     table = to_table(blocks)
     users = to_users_table(blocks)
     del blocks
