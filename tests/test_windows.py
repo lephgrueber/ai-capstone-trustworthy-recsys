@@ -184,3 +184,35 @@ def test_tower_sweep_summarizes_variants(tmp_path):
         assert len(rows[1]["curve"]) == 2
     finally:
         fixture.doCleanups()
+
+
+def test_cold_start_vectors_for_movies_first_rated_in_train_b(tmp_path):
+    pytest.importorskip("torch")
+    import test_data_pipeline as fixtures
+    from trustworthy_recsys.data.retrieval_inputs import prepare_inputs
+    from trustworthy_recsys.data.windows import prepare
+    from trustworthy_recsys.retrieval.cold_start import run
+    from trustworthy_recsys.retrieval.train import train
+
+    fixture = fixtures.PipelineTests()
+    fixture.setUp()
+    try:
+        rng = np.random.default_rng(0)
+        records = [(u, m, float(rng.choice([2, 4, 5])), int(day))
+                   for u in range(1, 9) for m, day in zip(rng.permutation(6)[:5] + 1, sorted(rng.choice(np.arange(1, 13), 5, replace=False)))]
+        records += [(u, 6, 5.0, 6) for u in range(1, 9) if (u, 6) not in {(r[0], r[1]) for r in records}]
+        fixture.write_ratings(sorted({(r[0], r[1]): r for r in records}.values()))
+        fixture.refresh_manifest()
+        run_dir = tmp_path / "run"
+        fixtures.run_pipeline(fixture.raw, run_dir, fixture.manifest, fixture.readme,
+                              explicit=("2020-01-08", "2020-01-10"), chunk_size=4, dataset_name="synthetic-test")
+        windows = prepare(run_dir, "calendar", tmp_path / "windows", ab_ratio=1, names=("dev",))
+        prepare_inputs(run_dir, "calendar", tmp_path / "inputs", 4, ("train",), windows["windows"]["train_a"]["end"])
+        train(tmp_path / "inputs", tmp_path / "towers", epochs=1, batch_size=3, threads=1,
+              selection_examples=tmp_path / "windows" / "dev.jsonl", identity_dropout=.5)
+        report = run(run_dir, tmp_path / "inputs", tmp_path / "towers", tmp_path / "windows" / "dev.jsonl",
+                     tmp_path / "cold.json", k=3)
+        assert report["identity_dropout"] == .5 and report["new_movies"] >= 0
+        assert report["original_catalog_recall"]["viewers"] >= 0
+    finally:
+        fixture.doCleanups()

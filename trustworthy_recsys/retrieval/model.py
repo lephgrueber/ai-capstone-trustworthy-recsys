@@ -100,7 +100,7 @@ def history_batch(config: HistoryConfig, n_items, favorites, ratings, times, as_
 
 class TwoTower(nn.Module):
     def __init__(self, item_features, embedding_dim=32, hidden_dim=64, identity_dim=16, history=None,
-                 movie_side=None, side=None):
+                 movie_side=None, side=None, identity_dropout=0.0):
         """`movie_side` is the saved MovieSide.state(); `side` the rebuilt MovieSide object."""
         super().__init__()
         features = torch.as_tensor(np.array(item_features,copy=True),dtype=torch.float32)
@@ -158,6 +158,11 @@ class TwoTower(nn.Module):
         self.user_tower = nn.Sequential(nn.Linear(features.shape[1]+1+extra,hidden_dim),nn.ReLU(),nn.Linear(hidden_dim,embedding_dim))
         self.item_tower = nn.Sequential(nn.Linear(features.shape[1]+identity_dim+side_width,hidden_dim),nn.ReLU(),nn.Linear(hidden_dim,embedding_dim))
         self.config = dict(embedding_dim=embedding_dim,hidden_dim=hidden_dim,identity_dim=identity_dim)
+        # Feedback §8 (optional): hide the movie-ID vector for a share of training targets so
+        # the movie tower also learns to place a movie from its metadata alone.
+        self.identity_dropout = float(identity_dropout)
+        if identity_dropout:
+            self.config['identity_dropout'] = self.identity_dropout
         if h.active:
             self.config['history'] = asdict(h)
         if side is not None:
@@ -262,10 +267,30 @@ class TwoTower(nn.Module):
         return F.normalize(self.user_tower(profiles),dim=-1)
 
     def encode_item(self, item_ids, tag_rows=None):
-        parts=[self.identity(item_ids),self.item_features[item_ids]]
+        identity=self.identity(item_ids)
+        if self.training and self.identity_dropout:
+            keep=(torch.rand(identity.shape[:-1])>=self.identity_dropout).float().unsqueeze(-1)
+            identity=identity*keep
+        parts=[identity,self.item_features[item_ids]]
         if self.side is not None:
             parts.append(self.item_side(item_ids, tag_rows))
         return F.normalize(self.item_tower(torch.cat(parts,dim=-1)),dim=-1)
+
+    @torch.inference_mode()
+    def metadata_only_vectors(self, genre_features, side_tensors=None):
+        """Movie vectors with a zero movie-ID vector (movies the towers never saw).
+
+        genre_features: [n, genres] weights in the model's genre vocabulary.
+        side_tensors: per-movie metadata rows aligned with item_side() output, if any.
+        """
+        self.eval()
+        genre_features = torch.as_tensor(np.asarray(genre_features), dtype=torch.float32)
+        parts = [torch.zeros(len(genre_features), self.identity.embedding_dim), genre_features]
+        if self.side is not None:
+            if side_tensors is None:
+                raise ValueError('This movie tower also needs metadata rows for new movies')
+            parts.append(torch.as_tensor(side_tensors, dtype=torch.float32))
+        return F.normalize(self.item_tower(torch.cat(parts, dim=-1)), dim=-1).numpy()
 
     def _sparse(self, name):
         return name in ('identity.weight', 'history_identity.weight') or name.startswith('people.')

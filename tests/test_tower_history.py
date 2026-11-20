@@ -98,3 +98,15 @@ def test_target_ratings_found_in_positive_history():
                              positive_items=np.array([5, 7, 7, 1]), positive_ratings=np.array([4, 5, 4.5, 4.0]),
                              pair_users=np.array([0, 1, 1]), target_items=np.array([7, 7, 1]))
     assert target_ratings(inputs).tolist() == [5, 4.5, 4.0]
+
+
+def test_metadata_only_vectors_and_identity_dropout():
+    model = TwoTower(FEATURES, embedding_dim=4, hidden_dim=8, identity_dim=2, identity_dropout=1.0)
+    new = model.metadata_only_vectors(np.array([[.5, .5, 0], [.5, .5, 0], [0, 0, 1]], dtype="float32"))
+    assert np.allclose(np.linalg.norm(new, axis=1), 1, atol=1e-5)
+    assert np.allclose(new[0], new[1]) and not np.allclose(new[0], new[2])  # genre-driven only
+    model.train()
+    hidden = model.encode_item(torch.tensor([0, 1]))
+    assert torch.allclose(hidden[0], hidden[1])  # identities fully dropped while training
+    model.eval()
+    assert not torch.allclose(*model.encode_item(torch.tensor([0, 1])))  # used at inference

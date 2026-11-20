@@ -170,7 +170,7 @@ def selection_score(recommender,records,k,as_of=None,dislike_threshold=2.0):
 def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=42,
           embedding_dim=32,max_pairs=0,validation_users=0,threads=2,selection_examples=None,
           selection_k=500,select=True,temperature=.1,history=None,dislike_penalty=0.0,movie_side=None,
-          export_as_of=None,five_star_weight=None,target_sampling=None):
+          export_as_of=None,five_star_weight=None,target_sampling=None,identity_dropout=0.0):
     """`movie_side`: MovieSideConfig fields (metadata/tag dirs and which inputs to use).
     `export_as_of`: Unix seconds for the saved item vectors' tag summaries (default: the
     end of the fitting window)."""
@@ -228,7 +228,8 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
     if movie_side:
         from .movie_side import MovieSide, MovieSideConfig
         side=MovieSide(MovieSideConfig(**movie_side),inputs.item_ids)
-    model=TwoTower(inputs.item_features,embedding_dim=embedding_dim,history=history_config,side=side)
+    model=TwoTower(inputs.item_features,embedding_dim=embedding_dim,history=history_config,side=side,
+                   identity_dropout=identity_dropout)
     snapshots=None
     if side is not None and side.config.tags:
         # Each target (and its favorites) sees tags first used before Jan 1 of the target's year.
@@ -369,6 +370,8 @@ def main():
                    help='Viewer-tower history JSON, e.g. \'{"favorites": true, "pooling": "recency", "dislikes": true}\'')
     p.add_argument('--dislike-penalty',type=float,default=0.0)
     p.add_argument('--five-star-weight',type=float,help='Loss weight of five-star targets (other likes = 1)')
+    p.add_argument('--identity-dropout',type=float,default=0.0,
+                   help='Share of training targets whose movie-ID vector is hidden (cold-start experiment)')
     p.add_argument('--target-sampling',type=json.loads,default=None,
                    help='With all-target inputs: \'{"mode": "rotate", "cap": 8, "seed": 0}\' (modes: all, spaced, fixed, rotate)')
     p.add_argument('--movie-side',type=json.loads,default=None,
@@ -376,7 +379,7 @@ def main():
     a=p.parse_args()
     train(a.inputs_dir,a.output_dir,a.epochs,a.batch_size,a.learning_rate,a.seed,a.embedding_dim,a.max_pairs,
           a.validation_users,a.threads,a.selection_examples,a.selection_k,not a.no_selection,a.temperature,
-          a.history,a.dislike_penalty,a.movie_side,None,a.five_star_weight,a.target_sampling)
+          a.history,a.dislike_penalty,a.movie_side,None,a.five_star_weight,a.target_sampling,a.identity_dropout)
 
 
 if __name__=='__main__':
