@@ -87,8 +87,19 @@ FEATURE_NAMES = (
     "runtime_gap",
     "dislike_director_share",
     "dislike_tag_cosine_max",
+    # Feedback §3: days since the most recent rating >= the like threshold.
+    "user_days_since_like",
 )
 COL = {name: index for index, name in enumerate(FEATURE_NAMES)}
+RATING_HISTORY = ("user_mean_rating", "user_log_rating_count", "user_days_inactive", "user_days_since_like")
+# Which rating-history values each app version can calculate (feedback §3); the rest are
+# missing (NaN) at evaluation. This repository's browser already saves dated star ratings.
+AVAILABILITY = {
+    "movielens": (),
+    "favorites_only": RATING_HISTORY,
+    "likes_with_dates": ("user_mean_rating", "user_log_rating_count", "user_days_inactive"),
+    "star_ratings": (),
+}
 CREDIT_ROLES = (("directors", "director"), ("writers", "writer"), ("cast", "cast"))
 PHRASE_FAVORITES = 5
 PHRASES_PER_MOVIE = 20
@@ -136,6 +147,7 @@ class RankingFeatures:
         self.item_map = {item: index for index, item in enumerate(self.item_ids)}
         self.item_features = np.asarray(item_features, dtype="float32")
         self.cutoff_seconds = int(cutoff_seconds)
+        self.threshold = threshold
         self.max_history = max_history
         self.recent_likes = recent_likes
         n_items, n_users = len(self.item_ids), len(user_ids)
@@ -160,6 +172,12 @@ class RankingFeatures:
         ]).astype("float32")
         self.years = years
 
+        last_like = np.full(n_users, np.iinfo(np.int64).min, dtype=np.int64)
+        liked_any = ratings >= threshold
+        np.maximum.at(last_like, user_codes[liked_any], timestamps[liked_any])
+        with np.errstate(invalid="ignore"):
+            self.user_since_like = np.where(last_like > np.iinfo(np.int64).min,
+                                            (cutoff_seconds - last_like) / SECONDS_PER_DAY, np.nan).astype("float32")
         user_counts = np.bincount(user_codes, minlength=n_users)
         user_sums = np.bincount(user_codes, weights=ratings, minlength=n_users)
         last_seen = np.full(n_users, np.iinfo(np.int64).min, dtype=np.int64)
@@ -332,6 +350,7 @@ class RankingFeatures:
         row = self.user_map.get(user_id) if user_id is not None else None
         if row is not None:
             out[:, 10:13] = self.user_columns[row]
+            out[:, COL["user_days_since_like"]] = self.user_since_like[row]
         if rating_statistics is not None:
             # A supplied browser profile overrides only request-scoped user statistics.
             # None remains NaN; a genuine count of zero remains log1p(0) == 0.
@@ -341,6 +360,8 @@ class RankingFeatures:
                 rating_statistics.days_inactive,
             )
             out[:, 10:13] = [np.nan if value is None else value for value in values]
+            since_like = getattr(rating_statistics, "days_since_like", None)
+            out[:, COL["user_days_since_like"]] = np.nan if since_like is None else since_like
         if disliked_items is not None:
             disliked = self.history_indices(disliked_items)
             out[:, 22] = np.log1p(len(disliked))
@@ -402,3 +423,25 @@ class RankingFeatures:
                 out[:, COL["tag_cosine_max"]] = cos.max(axis=1)
                 out[:, COL["tag_cosine_mean"]] = cos.mean(axis=1)
                 out[:, COL["tag_phrase_match_max"]] = self.phrase_match(candidates, tagged[-PHRASE_FAVORITES:])
+
+
+def rating_statistics_from_record(record, as_of, threshold=4.0):
+    """Rating-history values from a viewer's earlier ratings (a window-export record).
+
+    The same definitions as a numeric browser profile: unweighted mean of every rating,
+    number of ratings, days since the latest rating of any value, and days since the
+    latest rating >= threshold. Values with no supporting rating are None.
+    """
+    from trustworthy_recsys.serving.contracts import RatingStatistics
+
+    ratings = list(record.get("history_ratings", ())) + list(record.get("other_rated_ratings", ()))
+    times = list(record.get("history_times", ())) + list(record.get("other_rated_times", ()))
+    likes = [t for t, r in zip(times, ratings) if r >= threshold]
+    days = lambda stamp: max(0.0, (as_of - stamp) / SECONDS_PER_DAY)
+    return RatingStatistics(
+        mean_rating=float(np.mean(ratings)) if ratings else None,
+        rating_count=len(ratings),
+        days_inactive=days(max(times)) if times else None,
+        days_since_like=days(max(likes)) if likes else None,
+        complete=True,
+    )

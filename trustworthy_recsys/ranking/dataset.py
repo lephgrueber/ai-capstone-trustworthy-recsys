@@ -32,7 +32,7 @@ from trustworthy_recsys.data.windows import history_bucket, load_records, read_w
 from trustworthy_recsys.retrieval.index import ExactIndex
 from trustworthy_recsys.retrieval.recommender import RetrievalRecommender, request_from_record
 from trustworthy_recsys.retrieval.train import sampled_examples
-from .features import FEATURE_NAMES, RankingFeatures
+from .features import FEATURE_NAMES, RankingFeatures, rating_statistics_from_record
 
 POPULARITY_DEPTH = 50
 
@@ -84,7 +84,11 @@ def build_rows(rec, features, examples, depth, progress_every=1000, popularity=N
         indices, scores, fallback = rec.recommend_scored(request, depth)
         # Legacy examples carry no rating detail, so dislikes are unknown (NaN), not zero.
         disliked = list(request.disliked_items) if isinstance(example, dict) else None
-        matrix = features.build(history, indices, scores, user_id, disliked_items=disliked)
+        # Window records pass rating-history values directly (as a browser would), computed
+        # from the viewer's earlier ratings; legacy examples keep the MovieLens-ID lookup.
+        statistics = (rating_statistics_from_record(example, as_of, features.threshold)
+                      if isinstance(example, dict) and as_of is not None and "history_ratings" in example else None)
+        matrix = features.build(history, indices, scores, user_id, statistics, disliked_items=disliked)
         movie_ids = [rec.inputs.item_ids[index] for index in indices]
         relevant = set(_field(example, "relevant_items"))
         labels = np.array([movie in relevant for movie in movie_ids], dtype="int8")

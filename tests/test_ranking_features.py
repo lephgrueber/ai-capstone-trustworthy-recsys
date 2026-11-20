@@ -195,3 +195,30 @@ def test_metadata_comparisons_and_missing_rules(tmp_path):
                  FakeEncoder().encode(["space travel"])[0] @ FakeEncoder().encode(["funny"])[0]]), abs=1e-2)
     disliked = features.build(["b"], [2], user_id="u1", disliked_items=["a"])[0]
     assert disliked[COLUMN["dislike_director_share"]] == 1 and disliked[COLUMN["dislike_tag_cosine_max"]] > .5
+
+
+def test_record_rating_statistics_match_movielens_lookup():
+    from trustworthy_recsys.ranking.features import RATING_HISTORY, rating_statistics_from_record
+    # u3 before the cutoff: liked b (day 395, 4.0) and c (day 396, 4.5), rated d 2.0 on day 397.
+    record = {"history_items": ["b", "c"], "history_ratings": [4.0, 4.5], "history_times": [395 * DAY, 396 * DAY],
+              "other_rated_items": ["d"], "other_rated_ratings": [2.0], "other_rated_times": [397 * DAY]}
+    stats = rating_statistics_from_record(record, CUTOFF)
+    assert stats.days_since_like == pytest.approx(4) and stats.days_inactive == pytest.approx(3)
+    features = fitted()
+    looked_up = features.build(["b", "c"], [0], user_id="u3")
+    passed = features.build(["b", "c"], [0], rating_statistics=stats)
+    columns = [COLUMN[name] for name in RATING_HISTORY]
+    assert np.allclose(looked_up[:, columns], passed[:, columns])
+    never_liked = rating_statistics_from_record({"other_rated_ratings": [1.0], "other_rated_times": [5]}, CUTOFF)
+    assert never_liked.days_since_like is None and never_liked.rating_count == 1
+
+
+def test_masking_is_per_viewer_and_deterministic():
+    from trustworthy_recsys.ranking.train import mask_columns
+    users = np.repeat([f"u{i}" for i in range(200)], 3)
+    table = {"user_id": users, "user_mean_rating": np.ones(600, dtype="float32")}
+    half = mask_columns(dict(table), {"user_mean_rating": .5}, 0)["user_mean_rating"]
+    assert 60 < np.isnan(half).sum() / 3 < 140
+    assert all(len(set(np.isnan(half[i:i + 3]))) == 1 for i in range(0, 600, 3))  # whole viewers
+    assert np.array_equal(np.isnan(half), np.isnan(mask_columns(dict(table), {"user_mean_rating": .5}, 0)["user_mean_rating"]))
+    assert np.isnan(mask_columns(dict(table), {"user_mean_rating": 1.0}, 0)["user_mean_rating"]).all()

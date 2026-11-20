@@ -77,3 +77,11 @@ def test_model_context_aligns_ratings_times_and_dislikes():
     assert query.history_times == [None, (NOW - timedelta(days=1)).timestamp()]
     assert query.disliked_items == ["3"]  # 3.0 stars is neither a like nor a dislike
     assert query.as_of == NOW.timestamp()
+
+
+def test_days_since_like_ignores_non_likes_and_waits_for_first_like():
+    query = derive_model_query(PreferenceState(ratings=[rating("1", 4.5, 6), rating("2", 2.0, 1)]), None, NOW)
+    assert query.rating_statistics.days_since_like == pytest.approx(6)
+    assert query.rating_statistics.days_inactive == pytest.approx(1)
+    none = derive_model_query(PreferenceState(ratings=[rating("2", 3.0, 1)]), None, NOW)
+    assert none.rating_statistics.days_since_like is None

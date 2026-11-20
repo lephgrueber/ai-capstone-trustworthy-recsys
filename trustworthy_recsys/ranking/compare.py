@@ -23,6 +23,7 @@ import pyarrow.parquet as pq
 
 from trustworthy_recsys.data.reporting import code_provenance, hashes, write_json
 from .evaluate import HISTORY_GROUPS, history_bucket
+from .features import AVAILABILITY
 from .train import group_ids, lightgbm_threads, ndcg_by_group
 
 PASS_THROUGH = "pass_through"
@@ -82,11 +83,16 @@ def bootstrap(diff, samples, rng):
             "viewers_worse": int((diff < 0).sum())}
 
 
-def compare(table_dir, a_dirs, b_dirs, k=12, samples=2000, seed=0, output=None):
+def compare(table_dir, a_dirs, b_dirs, k=12, samples=2000, seed=0, output=None, availability=None):
+    """`availability`: AVAILABILITY profile name; its unavailable values are NaN for both sides."""
     a_dirs = [str(x) for x in a_dirs]
     b_dirs = [str(x) for x in b_dirs]
     features = sorted({f for d in a_dirs + b_dirs for f in model_features(d)})
     manifest, data = load_table(table_dir, features)
+    hidden = AVAILABILITY[availability] if availability else ()
+    for name in hidden:
+        if name in data:
+            data[name] = np.full(len(data[name]), np.nan, dtype=data[name].dtype)
     groups, sizes = group_ids(data["user_id"])
     starts = np.concatenate([[0], np.cumsum(sizes)[:-1]])
     relevant = data["user_relevant_count"][starts].astype(np.int64)
@@ -100,6 +106,7 @@ def compare(table_dir, a_dirs, b_dirs, k=12, samples=2000, seed=0, output=None):
     rng = np.random.default_rng(seed)
     report = {"table": str(table_dir), "table_rows_sha256": manifest["rows_sha256"], "k": k,
               "a": a_dirs, "b": b_dirs, "bootstrap_samples": samples,
+              "availability": availability, "missing_at_evaluation": list(hidden),
               "method": "per-viewer B minus A, viewers resampled with replacement; seed repeats averaged per viewer",
               "scores": {}, "difference": {}, "seed_spread": {}}
     for metric in ("ndcg", "recall"):
@@ -136,8 +143,9 @@ def main():
     p.add_argument("--k", type=int, default=12)
     p.add_argument("--bootstrap", type=int, default=2000)
     p.add_argument("--output", type=Path)
+    p.add_argument("--availability", choices=list(AVAILABILITY), help="App version whose missing values to blank")
     a = p.parse_args()
-    print(summary_line(compare(a.table_dir, a.a, a.b, a.k, a.bootstrap, output=a.output)))
+    print(summary_line(compare(a.table_dir, a.a, a.b, a.k, a.bootstrap, output=a.output, availability=a.availability)))
 
 
 if __name__ == "__main__":

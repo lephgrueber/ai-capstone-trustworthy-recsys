@@ -74,6 +74,8 @@ class RatingStatistics(StrictModel):
     mean_rating: float | None = None
     rating_count: int | None = Field(default=None, ge=0)
     days_inactive: float | None = Field(default=None, ge=0)
+    # Days since the latest rating >= 4.0 (feedback §3); missing until the first like.
+    days_since_like: float | None = Field(default=None, ge=0)
     complete: bool
 
 

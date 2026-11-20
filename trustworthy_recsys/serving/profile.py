@@ -41,10 +41,12 @@ def derive_model_query(preferences: PreferenceState, known_user_id: str | None, 
         statistics = RatingStatistics(complete=False)
     elif normalized:
         latest = max(row[0] for row in normalized)
+        liked = [row[0] for row in normalized if row[2] >= 4.0]
         statistics = RatingStatistics(
             mean_rating=sum(row[2] for row in normalized) / len(normalized),
             rating_count=len(normalized),
             days_inactive=max(0.0, (as_of - latest).total_seconds() / SECONDS_PER_DAY),
+            days_since_like=max(0.0, (as_of - max(liked)).total_seconds() / SECONDS_PER_DAY) if liked else None,
             complete=True,
         )
     else:
