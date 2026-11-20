@@ -68,8 +68,8 @@ def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4,
         raise ValueError(
             "Model-input directory already exists; choose a new directory"
         )
-    if max_targets_per_user < 1:
-        raise ValueError("max_targets_per_user must be positive")
+    if max_targets_per_user < 0:
+        raise ValueError("max_targets_per_user must be non-negative (0 keeps every eligible target)")
     if (run / "INCOMPLETE").exists():
         raise ValueError("Source data run is incomplete")
     manifest = read_json(run / "manifest.json")
@@ -206,44 +206,29 @@ def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4,
             )
             if not len(eligible):
                 counts["users_without_training_pair"] += 1
+            # max_targets_per_user=0 keeps every eligible like (sampling then happens in training).
+            take = len(eligible) if max_targets_per_user == 0 else min(max_targets_per_user, len(eligible))
             chosen = (
-                eligible[
-                    np.unique(
-                        np.linspace(
-                            0,
-                            len(eligible) - 1,
-                            min(max_targets_per_user, len(eligible)),
-                            dtype=int,
-                        )
-                    )
-                ]
+                eligible[np.unique(np.linspace(0, len(eligible) - 1, take, dtype=int))]
                 if len(eligible)
-                else []
+                else np.zeros(0, dtype=int)
             )
-            cumulative = np.cumsum(features[ids], axis=0)
-            for target in chosen:
-                end = int(starts[target])
+            if len(chosen):
+                ends = starts[chosen]
                 # Equal-time ratings are all excluded from the context, including the target.
-                if times[end - 1] >= times[target] or ids[target] in ids[:end]:
+                # Each viewer's movies are unique, so a target can never reappear in its context.
+                if (times[ends - 1] >= times[chosen]).any() or len(np.unique(ids)) != len(ids):
                     raise ValueError("Training context leaks its target")
-                genre_profile = cumulative[end - 1] / end
-                query = np.concatenate(
-                    [genre_profile, [np.log1p(end) / 10]]
+                cumulative = np.cumsum(features[ids], axis=0)
+                queries = np.column_stack(
+                    [cumulative[ends - 1] / ends[:, None], np.log1p(ends) / 10]
                 ).astype("float32")
-                query.tofile(handles["query_features"])
-                np.array([ids[target]], dtype="int32").tofile(
-                    handles["target_items"]
-                )
-                np.array([user_index], dtype="int32").tofile(
-                    handles["pair_users"]
-                )
-                np.array([positive_offsets[-1] + end], dtype="int64").tofile(
-                    handles["context_ends"]
-                )
-                np.array([times[target]], dtype="int64").tofile(
-                    handles["target_times"]
-                )
-                counts["training_pairs"] += 1
+                queries.tofile(handles["query_features"])
+                ids[chosen].astype("int32").tofile(handles["target_items"])
+                np.full(len(chosen), user_index, dtype="int32").tofile(handles["pair_users"])
+                (positive_offsets[-1] + ends).astype("int64").tofile(handles["context_ends"])
+                times[chosen].astype("int64").tofile(handles["target_times"])
+                counts["training_pairs"] += len(chosen)
             counts["training_rows"] += len(events)
             counts["positive_training_rows"] += len(positive)
             positive_offsets.append(positive_offsets[-1] + len(positive))
