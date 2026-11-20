@@ -21,6 +21,8 @@ import argparse
 import json
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 
 from trustworthy_recsys.data.reporting import code_provenance, hashes, write_json
 
@@ -30,7 +32,8 @@ DEFAULT_SETTINGS = {
     "tower": {"max_targets_per_user": 4, "epochs": 8, "batch_size": 256, "learning_rate": 0.002,
               "embedding_dim": 32, "temperature": 0.1, "seed": 42, "threads": 4,
               "history": {}, "dislike_penalty": 0.0, "movie_side": {}},
-    "reranker": {"rounds": 1000, "display_k": 12, "drop_features": [], "params": {}, "seed": 42,
+    "reranker": {"rounds": 1000, "display_k": 12, "drop_features": [], "params": {}, "seed": 42, "threads": 6,
+                 "mask_features": {},
                  "metadata_dir": None, "tags_dir": None},
 }
 
@@ -40,6 +43,19 @@ STAGES = {
     "final": (("train", "validation"), "final_a", "final_b", "test"),
     "deployment": (("train", "validation", "test"), "deployment_a", "deployment_b", None),
 }
+
+
+def isolated(target, **kwargs):
+    """Call module:function in a fresh interpreter without torch loaded.
+
+    On macOS, LightGBM is limited to one thread in any process that has imported torch
+    (conflicting OpenMP runtimes; see ranking.train.lightgbm_threads). Reranker fitting and
+    evaluation therefore run in their own process so they can use several threads.
+    """
+    code = ("import importlib, json, sys; module, name = sys.argv[1].split(':'); "
+            "getattr(importlib.import_module(module), name)(**json.loads(sys.argv[2]))")
+    payload = json.dumps(kwargs, default=str)
+    subprocess.run([sys.executable, "-c", code, target, payload], check=True)
 
 
 def complete(path: Path) -> bool:
@@ -57,8 +73,6 @@ def run_stage(stage, run_dir, root, settings=None, scenario="ratio_80_10_10", wi
     """Run one stage; returns its summary. ``final``/``deployment`` require ``locked.json``."""
     from trustworthy_recsys.data.retrieval_inputs import prepare_inputs
     from trustworthy_recsys.ranking.dataset import build
-    from trustworthy_recsys.ranking.evaluate import evaluate
-    from trustworthy_recsys.ranking.train import train as train_reranker
     from trustworthy_recsys.retrieval.train import train as train_towers
 
     root = Path(root)
@@ -114,15 +128,18 @@ def run_stage(stage, run_dir, root, settings=None, scenario="ratio_80_10_10", wi
     reranker = out / "reranker"
     if not complete(reranker):
         shutil.rmtree(reranker, ignore_errors=True)
-        train_reranker(tables[b_name], reranker, rerank["drop_features"], holdout=0, seed=rerank["seed"],
-                       rounds=rerank["rounds"] if select else rerank["selected_rounds"],
-                       params=rerank["params"] or None, retrieval_model_dir=towers,
-                       valid_table_dir=tables["dev"] if select else None, display_k=rerank["display_k"])
+        isolated("trustworthy_recsys.ranking.train:train", table_dir=tables[b_name], output_dir=reranker,
+                 drop_features=rerank["drop_features"], holdout=0, seed=rerank["seed"],
+                 rounds=rerank["rounds"] if select else rerank["selected_rounds"],
+                 threads=rerank.get("threads", 6), params=rerank["params"] or None, retrieval_model_dir=towers,
+                 valid_table_dir=tables["dev"] if select else None, display_k=rerank["display_k"],
+                 mask_features=rerank.get("mask_features") or None)
     report = None
     if eval_name is not None:
         report_path = out / f"{eval_name}_report.json"
         if not report_path.exists():
-            evaluate(tables[eval_name], reranker, report_path)
+            isolated("trustworthy_recsys.ranking.evaluate:evaluate", table_dir=tables[eval_name],
+                     model_dir=reranker, output=report_path)
         report = json.loads(report_path.read_text())
     if select:
         tower_log = json.loads((towers / "training.json").read_text())
