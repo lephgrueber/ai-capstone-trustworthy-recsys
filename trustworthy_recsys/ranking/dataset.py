@@ -37,6 +37,17 @@ from .features import FEATURE_NAMES, RankingFeatures
 POPULARITY_DEPTH = 50
 
 
+def source_record(metadata_dir, tags_dir):
+    """Paths and content hashes of the metadata artifacts the features were computed from."""
+    record = {}
+    if metadata_dir is not None:
+        record["metadata"] = {"path": str(metadata_dir),
+                              "sha256": hashes(Path(metadata_dir) / "movie_metadata.parquet")["sha256"]}
+    if tags_dir is not None:
+        record["tags"] = {"path": str(tags_dir), "sha256": hashes(Path(tags_dir) / "manifest.json")["sha256"]}
+    return record
+
+
 def verify_run_matches_inputs(run_dir, inputs):
     """The run must contain the same data the retrieval model was fitted on."""
     scenario = inputs.meta["scenario"]
@@ -133,7 +144,8 @@ def load_examples(examples_path, max_users=0, seed=42):
     return None, load_evaluation_examples(examples_path)
 
 
-def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, max_users=0, seed=42, threads=2):
+def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, max_users=0, seed=42, threads=2,
+          metadata_dir=None, tags_dir=None):
     out = Path(output_dir)
     if out.exists():
         raise ValueError("Output directory already exists; choose a new directory")
@@ -161,6 +173,8 @@ def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, 
         cutoff, partitions=partitions, threshold=inputs.meta["positive_threshold"],
     )
     features.attach_item_vectors(vectors)
+    if metadata_dir is not None or tags_dir is not None:
+        features.attach_metadata(metadata_dir, tags_dir)
     load_seconds = time.perf_counter() - load_started
 
     out.mkdir(parents=True)
@@ -192,6 +206,7 @@ def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, 
         "label": "1 if candidate is in the example's relevant_items (later rating >= threshold)",
         "feature_cutoff_utc": feature_cutoff,
         "feature_partitions": list(partitions),
+        "feature_sources": source_record(metadata_dir, tags_dir),
         "tower_cutoff_utc": inputs.meta["training_cutoff_utc"],
         "window": None if window is None else {k: window[k] for k in
                                                ("history_end_utc", "label_start_utc", "label_end_utc")},
@@ -224,8 +239,11 @@ def main():
     p.add_argument("--max-users", type=int, default=0, help="0 uses every example")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--threads", type=int, default=2)
+    p.add_argument("--metadata-dir", type=Path, help="Movie credits/runtime (data.metadata output)")
+    p.add_argument("--tags-dir", type=Path, help="Encoded tags (data.tags output)")
     a = p.parse_args()
-    summary = build(a.run_dir, a.inputs_dir, a.model_dir, a.examples, a.output_dir, a.depth, a.max_users, a.seed, a.threads)
+    summary = build(a.run_dir, a.inputs_dir, a.model_dir, a.examples, a.output_dir, a.depth, a.max_users, a.seed,
+                    a.threads, a.metadata_dir, a.tags_dir)
     print(json.dumps(summary, indent=2))
 
 

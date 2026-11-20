@@ -17,6 +17,15 @@ Feature groups:
   vector of each earlier favorite (one score per favorite, then aggregated).
 - dislikes: log1p(number of explicit dislikes), and the tower and audience cosines
   against disliked movies, kept separate from the favorite features.
+- metadata (attach_metadata): per credit role, the number of distinct people the
+  candidate shares with earlier favorites and the share of favorites (with any credit in
+  that role) that share at least one person; max / mean cosine between the candidate's
+  tag summary and each tagged favorite's, the number of tagged favorites compared, and a
+  phrase-level best-match score against the most recent tagged favorites; absolute gap
+  between candidate runtime and mean favorite runtime; director share and max tag cosine
+  against disliked movies. Credit matches use IMDb person IDs, so a person unseen in
+  training still matches. Unknown is NaN, never zero: a candidate without credits in a
+  role, without tags or without runtime gets NaN for those comparisons.
 
 Missing values (unknown user, empty history, unparsable year, no movie vectors attached,
 no dislike information) are NaN; LightGBM learns a default direction for them. A request
@@ -64,7 +73,25 @@ FEATURE_NAMES = (
     "dislike_tower_cosine_mean",
     "dislike_audience_cosine_max",
     "dislike_audience_cosine_mean",
+    # Movie metadata comparisons (feedback §2 table; IMDb credits/runtime and tags, §4-§5).
+    "director_shared_count",
+    "director_share",
+    "writer_shared_count",
+    "writer_share",
+    "cast_shared_count",
+    "cast_share",
+    "tag_cosine_max",
+    "tag_cosine_mean",
+    "tag_comparable_favorites",
+    "tag_phrase_match_max",
+    "runtime_gap",
+    "dislike_director_share",
+    "dislike_tag_cosine_max",
 )
+COL = {name: index for index, name in enumerate(FEATURE_NAMES)}
+CREDIT_ROLES = (("directors", "director"), ("writers", "writer"), ("cast", "cast"))
+PHRASE_FAVORITES = 5
+PHRASES_PER_MOVIE = 20
 
 YEAR = re.compile(r"\((\d{4})\)\s*$")
 SECONDS_PER_DAY = 86_400
@@ -198,6 +225,76 @@ class RankingFeatures:
         self.item_vectors = vectors / np.maximum(norms, 1e-12)
         return self
 
+    def attach_metadata(self, metadata_dir=None, tags_dir=None) -> "RankingFeatures":
+        """Credits/runtime (metadata.py output) and tags (tags.py output) as of the cutoff."""
+        self.metadata_sources = {}
+        if metadata_dir is not None:
+            from trustworthy_recsys.data.metadata import load
+            frame = load(metadata_dir).reindex(self.item_ids)
+            self.credit_matrices = {}
+            for role, _ in CREDIT_ROLES:
+                lists = [list(v) if isinstance(v, (list, np.ndarray)) else [] for v in frame[role]]
+                people = {p: i for i, p in enumerate(sorted({p for v in lists for p in v}))}
+                rows = np.repeat(np.arange(len(lists)), [len(v) for v in lists])
+                cols = np.array([people[p] for v in lists for p in v], dtype=np.int64)
+                self.credit_matrices[role] = sparse.csr_matrix(
+                    (np.ones(len(cols), dtype="float32"), (rows, cols)), shape=(len(lists), max(1, len(people))))
+            self.runtime = frame["runtime_minutes"].to_numpy(dtype="float64")
+            self.metadata_sources["metadata"] = str(metadata_dir)
+        if tags_dir is not None:
+            from trustworthy_recsys.data.tags import TagIndex
+            index = TagIndex(tags_dir, self.item_ids)
+            self.tag_vectors, self.has_tags = index.movie_vectors(self.cutoff_seconds)
+            phrase_lists = index.phrase_lists(self.cutoff_seconds)
+            self.tag_phrase_vectors = index.vectors
+            self.movie_phrases = [ids[-PHRASES_PER_MOVIE:] for ids in phrase_lists]
+            self.metadata_sources["tags"] = str(tags_dir)
+        return self
+
+    def credit_share(self, role, candidates, others):
+        """(shared-person count, share of comparable others sharing anyone); NaN when unknown."""
+        matrix = self.credit_matrices[role]
+        cand, other = matrix[candidates], matrix[others]
+        known_other = np.asarray(other.sum(axis=1)).ravel() > 0
+        has = np.asarray(cand.sum(axis=1)).ravel() > 0
+        union = np.asarray(other.sum(axis=0)).ravel() > 0
+        count = np.asarray(cand.multiply(union[None, :]).sum(axis=1)).ravel()
+        overlap = (cand @ other[known_other].T).toarray() > 0 if known_other.any() else np.zeros((len(candidates), 0))
+        share = overlap.mean(axis=1) if known_other.any() else np.full(len(candidates), np.nan)
+        count = np.where(has, count, np.nan)
+        share = np.where(has, share, np.nan)
+        return count, share
+
+    def tag_cosines(self, candidates, others):
+        tagged = others[self.has_tags[others]]
+        if not len(tagged):
+            return None, tagged
+        cos = self.tag_vectors[candidates] @ self.tag_vectors[tagged].T
+        cos[~self.has_tags[candidates]] = np.nan
+        return cos, tagged
+
+    def phrase_match(self, candidates, favorites):
+        """Per candidate: max over favorites of mean best-match cosine of its phrases."""
+        out = np.full(len(candidates), np.nan)
+        fav_lists = [self.movie_phrases[f] for f in favorites if len(self.movie_phrases[f])]
+        if not fav_lists:
+            return out
+        fav_ids = np.concatenate(fav_lists)
+        fav_bounds = np.cumsum([0] + [len(x) for x in fav_lists])
+        cand_lists = [self.movie_phrases[c] for c in candidates]
+        lengths = np.array([len(x) for x in cand_lists])
+        if not lengths.sum():
+            return out
+        cand_ids = np.concatenate([x for x in cand_lists if len(x)])
+        sims = self.tag_phrase_vectors[cand_ids] @ self.tag_phrase_vectors[fav_ids].T
+        best = np.maximum.reduceat(sims, fav_bounds[:-1], axis=1)  # [candidate phrases, favorites]
+        owners = np.repeat(np.flatnonzero(lengths), lengths[lengths > 0])
+        sums = np.zeros((len(candidates), best.shape[1]))
+        np.add.at(sums, owners, best)
+        means = sums[lengths > 0] / lengths[lengths > 0, None]
+        out[lengths > 0] = means.max(axis=1)
+        return out
+
     def audience_cosine(self, candidates, others):
         """Cosine between binary liker vectors: shared likers / sqrt(likers A x likers B)."""
         pair_counts = (self.likes[:, candidates].T @ self.likes[:, others]).toarray()
@@ -254,8 +351,15 @@ class RankingFeatures:
                     out[:, 23], out[:, 24] = tower.max(axis=1), tower.mean(axis=1)
                 audience = self.audience_cosine(candidates, disliked)
                 out[:, 25], out[:, 26] = audience.max(axis=1), audience.mean(axis=1)
+                if getattr(self, "credit_matrices", None) is not None:
+                    out[:, COL["dislike_director_share"]] = self.credit_share("directors", candidates, disliked)[1]
+                if getattr(self, "tag_vectors", None) is not None:
+                    cos, _ = self.tag_cosines(candidates, disliked)
+                    if cos is not None:
+                        out[:, COL["dislike_tag_cosine_max"]] = cos.max(axis=1)
         if not len(history):
             return out
+        self._metadata_features(out, candidates, history[-self.max_history:])
         if self.item_vectors is not None:
             tower = self.item_vectors[candidates] @ self.item_vectors[history[-self.max_history:]].T
             out[:, 20], out[:, 21] = tower.max(axis=1), tower.mean(axis=1)
@@ -282,3 +386,19 @@ class RankingFeatures:
             out[:, 18] = np.abs(self.years[candidates] - np.nanmean(history_years))
         out[:, 19] = np.log1p(popularity) - np.log1p(self.positive_counts[history]).mean()
         return out
+
+    def _metadata_features(self, out, candidates, favorites):
+        if getattr(self, "credit_matrices", None) is not None:
+            for role, name in CREDIT_ROLES:
+                out[:, COL[f"{name}_shared_count"]], out[:, COL[f"{name}_share"]] = \
+                    self.credit_share(role, candidates, favorites)
+            minutes = self.runtime[favorites]
+            if np.isfinite(minutes).any():
+                out[:, COL["runtime_gap"]] = np.abs(self.runtime[candidates] - np.nanmean(minutes))
+        if getattr(self, "tag_vectors", None) is not None:
+            cos, tagged = self.tag_cosines(candidates, favorites)
+            out[:, COL["tag_comparable_favorites"]] = len(tagged)
+            if cos is not None:
+                out[:, COL["tag_cosine_max"]] = cos.max(axis=1)
+                out[:, COL["tag_cosine_mean"]] = cos.mean(axis=1)
+                out[:, COL["tag_phrase_match_max"]] = self.phrase_match(candidates, tagged[-PHRASE_FAVORITES:])

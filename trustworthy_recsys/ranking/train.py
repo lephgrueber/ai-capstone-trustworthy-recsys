@@ -234,6 +234,8 @@ def _train_full(table, manifest, features, out, table_dir, valid_table_dir, roun
             raise ValueError("Fitting and dev tables use different retrieval models")
         if valid_manifest["rows_sha256"] == manifest["rows_sha256"]:
             raise ValueError("The dev table must differ from the fitting table")
+        if valid_manifest.get("feature_sources", {}) != manifest.get("feature_sources", {}):
+            raise ValueError("Fitting and dev tables use different metadata sources")
     fit, fit_users, fit_skipped = ranking_dataset(table, features, np.ones(len(table["label"]), dtype=bool))
     config = {**DEFAULT_PARAMS, **(params or {}), "seed": seed, "num_threads": lightgbm_threads(threads)}
     config.pop("eval_at", None)
@@ -262,6 +264,7 @@ def _train_full(table, manifest, features, out, table_dir, valid_table_dir, roun
         "table": str(table_dir), "table_rows_sha256": manifest["rows_sha256"],
         "candidate_depth": manifest["depth"], "feature_cutoff_utc": manifest["feature_cutoff_utc"],
         "feature_partitions": manifest.get("feature_partitions", ["train"]),
+        "feature_sources": manifest.get("feature_sources", {}),
         # Serving uses every rating the pipeline was fitted on: the fitting table's history
         # plus its label window (e.g. Final A + Final B), never anything later.
         "serving_features": None if not manifest.get("window") else {

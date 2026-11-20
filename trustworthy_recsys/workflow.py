@@ -30,7 +30,8 @@ DEFAULT_SETTINGS = {
     "tower": {"max_targets_per_user": 4, "epochs": 8, "batch_size": 256, "learning_rate": 0.002,
               "embedding_dim": 32, "temperature": 0.1, "seed": 42, "threads": 4,
               "history": {}, "dislike_penalty": 0.0, "movie_side": {}},
-    "reranker": {"rounds": 1000, "display_k": 12, "drop_features": [], "params": {}, "seed": 42},
+    "reranker": {"rounds": 1000, "display_k": 12, "drop_features": [], "params": {}, "seed": 42,
+                 "metadata_dir": None, "tags_dir": None},
 }
 
 STAGES = {
@@ -108,7 +109,8 @@ def run_stage(stage, run_dir, root, settings=None, scenario="ratio_80_10_10", wi
         if not complete(tables[name]):
             shutil.rmtree(tables[name], ignore_errors=True)
             build(run_dir, inputs, towers, windows_dir / f"{name}.jsonl", tables[name],
-                  depth=settings["depth"], threads=tower["threads"])
+                  depth=settings["depth"], threads=tower["threads"],
+                  metadata_dir=rerank.get("metadata_dir"), tags_dir=rerank.get("tags_dir"))
     reranker = out / "reranker"
     if not complete(reranker):
         shutil.rmtree(reranker, ignore_errors=True)

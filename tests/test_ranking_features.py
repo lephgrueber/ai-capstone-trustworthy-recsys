@@ -149,3 +149,49 @@ def test_dislike_features_are_separate_and_missing_is_not_zero():
     assert some[0, COLUMN["dislike_audience_cosine_max"]] == pytest.approx(1)
     # Favorite features are unchanged by dislikes.
     assert np.array_equal(none[:, :20], some[:, :20], equal_nan=True)
+
+
+def test_metadata_comparisons_and_missing_rules(tmp_path):
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from trustworthy_recsys.data.reporting import hashes, write_json
+    from trustworthy_recsys.data.tags import build as build_tags
+    from test_metadata_tags import FakeEncoder
+
+    meta = tmp_path / "meta"
+    meta.mkdir()
+    pq.write_table(pa.Table.from_pylist([
+        {"movie_id": "a", "imdb_id": None, "runtime_minutes": 100.0, "directors": ["d1"], "writers": ["w1"], "cast": []},
+        {"movie_id": "b", "imdb_id": None, "runtime_minutes": 140.0, "directors": ["d2"], "writers": [], "cast": ["c1"]},
+        {"movie_id": "c", "imdb_id": None, "runtime_minutes": None, "directors": ["d1", "d3"], "writers": ["w9"], "cast": ["c1"]},
+        {"movie_id": "d", "imdb_id": None, "runtime_minutes": 90.0, "directors": [], "writers": ["w1"], "cast": []},
+    ]), meta / "movie_metadata.parquet")
+    write_json(meta / "manifest.json", {"output_sha256": hashes(meta / "movie_metadata.parquet")["sha256"]})
+    run = tmp_path / "run"
+    run.mkdir()
+    early = pd.Timestamp(0, unit="s", tz="UTC")
+    pq.write_table(pa.table({"user_id": ["1"] * 4, "movie_id": ["a", "c", "c", "d"],
+                             "tag": ["funny", "hilarious", "space travel", "family"],
+                             "timestamp_utc": [early, early, early, pd.Timestamp(CUTOFF + DAY, unit="s", tz="UTC")]}),
+                   run / "tags.parquet")
+    build_tags(run, tmp_path / "tags", encoder_name="fake", encoder=FakeEncoder())
+    features = fitted().attach_metadata(meta, tmp_path / "tags")
+
+    out = features.build(["a", "b"], [2, 3], user_id="u1")
+    c, d = out
+    # c shares director d1 with a (1 of 2 favorites) and cast c1 with b (1 of 1 favorite with cast).
+    assert c[COLUMN["director_shared_count"]] == 1 and c[COLUMN["director_share"]] == pytest.approx(.5)
+    assert c[COLUMN["cast_share"]] == 1 and c[COLUMN["writer_share"]] == 0
+    # d lists no director (unknown -> NaN) but shares writer w1 with a.
+    assert np.isnan(d[COLUMN["director_share"]]) and d[COLUMN["writer_share"]] == 1
+    # Runtime gap to mean favorite runtime 120; c's runtime is unknown.
+    assert np.isnan(c[COLUMN["runtime_gap"]]) and d[COLUMN["runtime_gap"]] == 30
+    # Only favorite a is tagged before the cutoff; d's tag comes later, so d is untagged.
+    assert c[COLUMN["tag_comparable_favorites"]] == 1
+    assert c[COLUMN["tag_cosine_max"]] > 0.5 and np.isnan(d[COLUMN["tag_cosine_max"]])
+    assert c[COLUMN["tag_phrase_match_max"]] == pytest.approx(
+        np.mean([FakeEncoder().encode(["hilarious"])[0] @ FakeEncoder().encode(["funny"])[0],
+                 FakeEncoder().encode(["space travel"])[0] @ FakeEncoder().encode(["funny"])[0]]), abs=1e-2)
+    disliked = features.build(["b"], [2], user_id="u1", disliked_items=["a"])[0]
+    assert disliked[COLUMN["dislike_director_share"]] == 1 and disliked[COLUMN["dislike_tag_cosine_max"]] > .5

@@ -103,9 +103,12 @@ def test_metadata_towers_run_through_development(tmp_path):
             "history": {"favorites": True, "metadata": True},
             "movie_side": {"metadata_dir": str(tmp_path / "meta"), "tags_dir": str(tags),
                            "credits": True, "runtime": True, "tags": True}})
+        settings["reranker"].update({"metadata_dir": str(tmp_path / "meta"), "tags_dir": str(tags)})
         result = run_stage("development", run, tmp_path / "workflow", settings, scenario="calendar")
         towers = json.loads((tmp_path / "workflow" / "development" / "towers" / "training.json").read_text())
         assert towers["movie_side"]["tags"] and result["report"]["lambdarank/all"] >= 0
+        reranker = json.loads((tmp_path / "workflow" / "development" / "reranker" / "training.json").read_text())
+        assert set(reranker["feature_sources"]) == {"metadata", "tags"} and "tag_cosine_max" in reranker["features"]
         final = run_stage("final", run, tmp_path / "workflow", scenario="calendar")
         exported = json.loads((tmp_path / "workflow" / "final" / "towers" / "training.json").read_text())
         windows = json.loads((tmp_path / "workflow" / "windows_ab3" / "windows.json").read_text())["windows"]

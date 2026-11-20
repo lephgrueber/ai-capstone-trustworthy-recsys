@@ -64,6 +64,13 @@ class LambdaRankReranker:
         )
         # Vectors are already verified by retrieval_fingerprint above.
         features.attach_item_vectors(np.load(Path(retrieval_model_dir) / "item_embeddings.npy"))
+        sources = training.get("feature_sources") or {}
+        if sources:
+            from .dataset import source_record
+            paths = {name: sources[name]["path"] if name in sources else None for name in ("metadata", "tags")}
+            if source_record(paths["metadata"], paths["tags"]) != sources:
+                raise ValueError("reranker metadata artifacts changed since training")
+            features.attach_metadata(paths["metadata"], paths["tags"])
         info = ComponentInfo(name="lambdarank", version=f"{root.name}:{manifest_fingerprint(root)}", mode="learned")
         lightgbm_threads(1)  # must precede Booster creation, which parses the model in parallel
         return cls(lgb.Booster(model_file=str(root / "model.txt")), features, training["features"], info)
