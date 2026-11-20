@@ -175,3 +175,23 @@ def test_graded_ndcg_uses_star_gains_and_full_ideal():
     discounts = 1 / np.log2([2, 3])
     assert out[0] == pytest.approx(2 * discounts[0] / (2 * discounts[0] + 1.5 * discounts[1]))
     assert five_star_labels(np.array([0, 4.0, 4.5, 5.0])).tolist() == [0, 1, 1, 2]
+
+
+def test_ablation_runner_compares_variants_with_intervals(tmp_path):
+    from trustworthy_recsys.ranking.ablations import GROUPS, dropped, run
+    write_table(tmp_path / "train_b")
+    write_table(tmp_path / "dev", seed=1)
+    for name in ("train_b", "dev"):
+        write_users(tmp_path / name)
+    params = {"min_data_in_leaf": 5, "num_leaves": 7}
+    variants = {"all": {"params": params}, "no_recent": {"drop": ["recent_cosine_max"], "params": params},
+                "m3_only_seeds": {"keep_groups": ["m3"], "params": params, "seeds": [42, 7]},
+                "favorites_only_app": {"params": params, "availability": "favorites_only"}}
+    rows = run(tmp_path / "train_b", tmp_path / "dev", None, variants, tmp_path / "ablations", "all",
+               rounds=15, threads=1, samples=50)
+    by = {r["variant"]: r for r in rows}
+    assert by["all"]["difference_vs_reference"]["all"]["mean_difference"] == 0
+    assert by["no_recent"]["difference_vs_reference"]["all"]["mean_difference"] < 0  # the informative feature
+    assert by["m3_only_seeds"]["features"] == len(GROUPS["m3"]) and len(by["m3_only_seeds"]["seed_spread"]["ndcg_at_12"]["b"]["runs"]) == 2
+    assert "| no_recent |" in (tmp_path / "ablations" / "summary.md").read_text()
+    assert set(dropped({"keep_groups": ["m3", "tower"]})) == set(FEATURE_NAMES) - set(GROUPS["m3"]) - set(GROUPS["tower"])
