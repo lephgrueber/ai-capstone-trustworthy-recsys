@@ -182,6 +182,7 @@ def main():
     p.add_argument("--scenario", default="ratio_80_10_10")
     a = p.parse_args()
     report = diagnose(a.table_dir, a.model_dir, a.run_dir, a.k, a.metadata_dir, a.tags_dir, scenario=a.scenario)
+    a.output.parent.mkdir(parents=True, exist_ok=True)
     write_json(a.output, report)
     print(format_table(report))
     print(json.dumps({k: report[k] for k in ("catalog_coverage", "incomplete_feedback")}, indent=2))
