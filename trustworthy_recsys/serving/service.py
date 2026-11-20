@@ -41,6 +41,7 @@ class RecommendationService:
     backend_mode: str
     candidate_budget: int = 100
     feedback_store: object | None = None
+    tag_store: object | None = None  # VisitorTagStore when visitor tags are recorded
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc), repr=False, compare=False)
 
     def validate_preferences(self, request: RecommendationRequest) -> None:
@@ -62,6 +63,8 @@ class RecommendationService:
     def recommend(self, request: RecommendationRequest, request_id: str | None = None) -> RecommendationResponse:
         started = time.perf_counter()
         self.validate_preferences(request)
+        if self.tag_store is not None:
+            self.tag_store.record(request.preferences, self.catalog.supported_ids)
         try:
             query = derive_model_query(request.preferences, request.known_user_id, self.clock())
             combined_history = list(dict.fromkeys([*query.history_items, *request.temporary_history_items]))

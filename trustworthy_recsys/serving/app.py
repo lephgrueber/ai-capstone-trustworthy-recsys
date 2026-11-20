@@ -41,6 +41,14 @@ from trustworthy_recsys.serving.contracts import (
     FeedbackAck,
 )
 from trustworthy_recsys.serving.feedback import FeedbackStore, FeedbackError
+
+
+def build_visitor_tag_store(settings, reranker):
+    """Opt-in store for review tags; updates the reranker's tag summaries when it has them."""
+    if settings.visitor_tags != "record":
+        return None
+    from trustworthy_recsys.serving.visitor_tags import VisitorTagStore
+    return VisitorTagStore(settings.visitor_tag_db, getattr(reranker, "features", None))
 from trustworthy_recsys.serving.refinement import RefinementInterpreter, UnavailableInterpreter, CatalogInterpreter
 from trustworthy_recsys.serving.posters import PosterService, build_poster_service
 from trustworthy_recsys.serving.service import ComponentOutputError, RecommendationService, ServiceInputError
@@ -133,6 +141,7 @@ def _load_runtime(
             reranker=reranker,
             backend_mode=settings.backend_mode,
             candidate_budget=settings.candidate_budget,
+            tag_store=build_visitor_tag_store(settings, reranker),
             feedback_store=FeedbackStore(settings.feedback_db, settings.feedback_mode,
                 settings.feedback_epsilon, settings.feedback_traffic == 'synthetic',
                 provenance={

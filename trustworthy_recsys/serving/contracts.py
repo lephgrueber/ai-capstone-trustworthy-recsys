@@ -22,10 +22,26 @@ def _unique(values: list[str], name: str) -> list[str]:
     return values
 
 
+TagPhrase = Annotated[str, Field(min_length=1, max_length=40)]
+
+
 class RatingRecord(StrictModel):
     movie_id: MovieId
     rating: float = Field(ge=0.5, le=5.0, multiple_of=0.5)
     rated_at: datetime
+    # Optional phrases describing the movie (feedback §4); tagged_at is their latest change.
+    tags: list[TagPhrase] | None = Field(default=None, max_length=5)
+    tagged_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def tags_have_time(self):
+        if bool(self.tags) != (self.tagged_at is not None):
+            raise ValueError("tags and tagged_at must be supplied together")
+        if self.tagged_at is not None and (self.tagged_at.tzinfo is None or self.tagged_at.utcoffset() != timedelta(0)):
+            raise ValueError("tagged_at must be UTC")
+        if self.tags and any(not tag.strip() for tag in self.tags):
+            raise ValueError("tags must not be blank")
+        return self
 
     @field_validator("rating")
     @classmethod

@@ -262,7 +262,10 @@ class RankingFeatures:
         if tags_dir is not None:
             from trustworthy_recsys.data.tags import TagIndex
             index = TagIndex(tags_dir, self.item_ids)
-            self.tag_vectors, self.has_tags = index.movie_vectors(self.cutoff_seconds)
+            self.tag_vectors, self.has_tags = (array.copy() for array in index.movie_vectors(self.cutoff_seconds))
+            self.tag_sums = index.movie_sums(self.cutoff_seconds).copy()
+            self.tag_index = index
+            self.extra_phrase_vectors = []
             phrase_lists = index.phrase_lists(self.cutoff_seconds)
             self.tag_phrase_vectors = index.vectors
             self.movie_phrases = [ids[-PHRASES_PER_MOVIE:] for ids in phrase_lists]
@@ -291,6 +294,34 @@ class RankingFeatures:
         cos[~self.has_tags[candidates]] = np.nan
         return cos, tagged
 
+    def phrase_vectors(self, ids):
+        ids = np.asarray(ids, dtype=np.int64)
+        base = len(self.tag_phrase_vectors)
+        if not len(ids) or ids.max() < base:
+            return self.tag_phrase_vectors[ids]
+        return np.stack([self.tag_phrase_vectors[i] if i < base else self.extra_phrase_vectors[i - base] for i in ids])
+
+    def add_movie_tags(self, item, phrases, encoder=None):
+        """Fold new phrases (e.g. visitor review tags) into one movie's tag summary."""
+        from trustworthy_recsys.data.tags import normalize
+        vectors = self.tag_index.encode_new(phrases, encoder)
+        current = set(int(x) for x in self.movie_phrases[item])
+        for phrase, vector in zip(phrases, vectors):
+            phrase_id = self.tag_index.phrase_id.get(normalize(phrase))
+            if phrase_id is None:
+                self.extra_phrase_vectors.append(np.asarray(vector, dtype="float32"))
+                phrase_id = len(self.tag_phrase_vectors) + len(self.extra_phrase_vectors) - 1
+                self.tag_index.phrase_id[normalize(phrase)] = phrase_id
+            if phrase_id in current:
+                continue
+            current.add(phrase_id)
+            self.movie_phrases[item] = np.append(self.movie_phrases[item], phrase_id)[-PHRASES_PER_MOVIE:]
+            self.tag_sums[item] += vector
+        norm = np.linalg.norm(self.tag_sums[item])
+        if norm > 0:
+            self.tag_vectors[item] = self.tag_sums[item] / norm
+            self.has_tags[item] = True
+
     def phrase_match(self, candidates, favorites):
         """Per candidate: max over favorites of mean best-match cosine of its phrases."""
         out = np.full(len(candidates), np.nan)
@@ -304,7 +335,7 @@ class RankingFeatures:
         if not lengths.sum():
             return out
         cand_ids = np.concatenate([x for x in cand_lists if len(x)])
-        sims = self.tag_phrase_vectors[cand_ids] @ self.tag_phrase_vectors[fav_ids].T
+        sims = self.phrase_vectors(cand_ids) @ self.phrase_vectors(fav_ids).T
         best = np.maximum.reduceat(sims, fav_bounds[:-1], axis=1)  # [candidate phrases, favorites]
         owners = np.repeat(np.flatnonzero(lengths), lengths[lengths > 0])
         sums = np.zeros((len(candidates), best.shape[1]))

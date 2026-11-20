@@ -123,6 +123,7 @@ class TagIndex:
         self.n_items = len(item_ids)
         self.dim = self.vectors.shape[1]
         self._cache = {}
+        self._sums = {}
 
     def _visible(self, as_of):
         return self.first_used < as_of
@@ -137,6 +138,7 @@ class TagIndex:
                                             (self.item[keep], self.phrase[keep])),
                                            shape=(self.n_items, len(self.vectors)))
             sums = np.asarray(membership @ self.vectors, dtype="float64")
+            self._sums[int(as_of)] = sums
             has = np.bincount(self.item[keep], minlength=self.n_items) > 0
             norms = np.linalg.norm(sums, axis=1, keepdims=True)
             mean = np.divide(sums, norms, out=np.zeros_like(sums), where=norms > 0).astype("float32")
@@ -144,6 +146,11 @@ class TagIndex:
                 mean = np.where(has[:, None], (mean - self.mean) @ self.projection, 0).astype("float32")
             self._cache[key] = (mean, has)
         return self._cache[key]
+
+    def movie_sums(self, as_of):
+        """Unnormalized sums of distinct phrase vectors per movie (to add phrases later)."""
+        self.movie_vectors(as_of)
+        return self._sums[int(as_of)]
 
     def snapshots(self, years, projected=True):
         """Stacked movie_vectors at Jan 1 of each year (for Train A target-time lookups)."""
