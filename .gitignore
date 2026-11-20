@@ -57,3 +57,5 @@ trustworthy_recsys/data/ratings.csv
 trustworthy_recsys/data/movies.csv
 trustworthy_recsys/data/tags.csv
 trustworthy_recsys/data/links.csv
+# M3 feedback experiment outputs (windows, metadata, models, tables, logs)
+artifacts/m3_feedback/
