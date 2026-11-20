@@ -29,9 +29,10 @@ from trustworthy_recsys.data.reporting import code_provenance, hashes, write_jso
 DEFAULT_SETTINGS = {
     "ab_ratio": 7.0,
     "depth": 500,
+    "dislike_threshold": 2.0,
     "tower": {"max_targets_per_user": 4, "epochs": 8, "batch_size": 256, "learning_rate": 0.002,
               "embedding_dim": 32, "temperature": 0.1, "seed": 42, "threads": 4,
-              "history": {}, "dislike_penalty": 0.0, "movie_side": {}},
+              "history": {}, "dislike_penalty": 0.0, "movie_side": {}, "five_star_weight": None},
     "reranker": {"rounds": 1000, "display_k": 12, "drop_features": [], "params": {}, "seed": 42, "threads": 6,
                  "mask_features": {},
                  "metadata_dir": None, "tags_dir": None},
@@ -102,7 +103,7 @@ def run_stage(stage, run_dir, root, settings=None, scenario="ratio_80_10_10", wi
     if not complete(inputs):
         shutil.rmtree(inputs, ignore_errors=True)
         prepare_inputs(run_dir, scenario, inputs, tower["max_targets_per_user"], partitions,
-                       windows["windows"][a_window]["end"])
+                       windows["windows"][a_window]["end"], settings.get("dislike_threshold", 2.0))
     select = stage == "development"
     if not complete(towers):
         shutil.rmtree(towers, ignore_errors=True)
@@ -111,7 +112,7 @@ def run_stage(stage, run_dir, root, settings=None, scenario="ratio_80_10_10", wi
                      embedding_dim=tower["embedding_dim"], threads=tower["threads"],
                      temperature=tower["temperature"], select=select,
                      history=tower["history"] or None, dislike_penalty=tower["dislike_penalty"],
-                     movie_side=tower["movie_side"] or None,
+                     movie_side=tower["movie_side"] or None, five_star_weight=tower.get("five_star_weight"),
                      # Final/deployment vectors use everything fitted on (end of the B window).
                      export_as_of=None if select else windows["windows"][b_name]["end"],
                      selection_examples=windows_dir / "dev.jsonl" if select else None)
@@ -133,7 +134,8 @@ def run_stage(stage, run_dir, root, settings=None, scenario="ratio_80_10_10", wi
                  rounds=rerank["rounds"] if select else rerank["selected_rounds"],
                  threads=rerank.get("threads", 6), params=rerank["params"] or None, retrieval_model_dir=towers,
                  valid_table_dir=tables["dev"] if select else None, display_k=rerank["display_k"],
-                 mask_features=rerank.get("mask_features") or None)
+                 mask_features=rerank.get("mask_features") or None,
+                 five_star_weight=rerank.get("five_star_weight"))
     report = None
     if eval_name is not None:
         report_path = out / f"{eval_name}_report.json"

@@ -164,3 +164,14 @@ def test_paired_comparison_of_feature_variants(tmp_path):
     assert len(report["seed_spread"]["ndcg_at_12"]["b"]["runs"]) == 2
     baseline = compare(tmp_path / "dev", ["pass_through"], [tmp_path / "with"], samples=50)
     assert baseline["scores"]["recall_at_12"]["a"] >= 0
+
+
+def test_graded_ndcg_uses_star_gains_and_full_ideal():
+    from trustworthy_recsys.ranking.labels import five_star_labels, graded_gain, graded_ndcg
+    gains = graded_gain([5.0, 0, 4.0]) * (np.array([5.0, 0, 4.0]) >= 4)
+    # Ideal includes a missed 4.5-star like (gain 1.5): [2, 1.5, 1].
+    ideal = [np.array([2.0, 1.5, 1.0])]
+    out = graded_ndcg(np.zeros(3, dtype=int), gains, np.array([3.0, 2.0, 1.0]), ideal, 2)
+    discounts = 1 / np.log2([2, 3])
+    assert out[0] == pytest.approx(2 * discounts[0] / (2 * discounts[0] + 1.5 * discounts[1]))
+    assert five_star_labels(np.array([0, 4.0, 4.5, 5.0])).tolist() == [0, 1, 1, 2]

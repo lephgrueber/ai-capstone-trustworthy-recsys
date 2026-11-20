@@ -133,16 +133,34 @@ def evaluate(table_dir, model_dir, output, ks=KS, bootstrap=1000):
     }
     if viewers is not None and "popularity_labels" in viewers:
         methods = {"popularity": popularity_metrics(viewers, ks), **methods}
+    graded_k = 12
+    try:
+        from .labels import graded_ndcg, table_ratings
+        movie_ids = pq.read_table(table_dir / "rows.parquet", columns=["movie_id"])["movie_id"].to_numpy(zero_copy_only=False)
+        if same_table:
+            movie_ids = movie_ids[mask]
+        row_ratings, ideal = table_ratings(table_dir, data["user_id"], movie_ids)
+        groups = np.repeat(np.arange(len(sizes)), sizes)
+        ideals = [ideal.get(u, np.zeros(0)) for u in data["user_id"][starts]]
+        from .labels import graded_gain
+        gains = graded_gain(row_ratings) * (row_ratings >= 4.0)
+        for method, order in (("pass_through", -data["retrieval_rank"].astype(float)), ("lambdarank", scores)):
+            methods[method][f"graded_ndcg_at_{graded_k}"] = graded_ndcg(groups, gains, order, ideals, graded_k)
+    except ValueError as error:
+        if "window export" not in str(error):
+            raise
+        # Legacy tables (no window export with star ratings): binary metrics only.
     buckets = (viewers["history_bucket"].to_numpy() if viewers is not None
                else history_bucket(data["user_log_history_length"][starts]))
     slices = {"all": np.ones(len(sizes), dtype=bool),
               "fallback": data["fallback"][starts],
               **{name: buckets == name for name in HISTORY_GROUPS}}
-    metrics = {f"{method}/{name}": {"users": int(mask.sum()),
-                                    **{metric: float(values[mask].mean()) for metric, values in per_user.items()}}
-               for method, per_user in methods.items() for name, mask in slices.items() if mask.any()}
+    metrics = {f"{method}/{name}": {"users": int(selected.sum()),
+                                    **{metric: float(values[selected].mean()) for metric, values in per_user.items()}}
+               for method, per_user in methods.items() for name, selected in slices.items() if selected.any()}
+    shared = [m for m in methods["lambdarank"] if m in methods["pass_through"]]
     comparison = {metric: paired_bootstrap(methods["lambdarank"][metric], methods["pass_through"][metric], bootstrap)
-                  for metric in methods["lambdarank"]}
+                  for metric in shared}
     report = {
         "population": population, "users": int(len(sizes)), "rows": int(len(labels)),
         "viewer_groups": {name: int(mask.sum()) for name, mask in slices.items()},

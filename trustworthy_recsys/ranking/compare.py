@@ -24,6 +24,7 @@ import pyarrow.parquet as pq
 from trustworthy_recsys.data.reporting import code_provenance, hashes, write_json
 from .evaluate import HISTORY_GROUPS, history_bucket
 from .features import AVAILABILITY
+from .labels import graded_gain, graded_ndcg, table_ratings
 from .train import group_ids, lightgbm_threads, ndcg_by_group
 
 PASS_THROUGH = "pass_through"
@@ -65,13 +66,16 @@ def recall_by_group(groups, labels, scores, relevant, k):
     return np.bincount(g[top], weights=labels[order][top], minlength=len(relevant)) / relevant
 
 
-def per_viewer(model_dirs, data, groups, relevant, k):
+def per_viewer(model_dirs, data, groups, relevant, k, graded=None):
     labels = data["label"].astype(float)
     runs = []
     for model_dir in model_dirs:
         scores = scores_for(model_dir, data)
-        runs.append({"ndcg": ndcg_by_group(groups, labels, scores, relevant, k),
-                     "recall": recall_by_group(groups, labels, scores, relevant, k)})
+        run = {"ndcg": ndcg_by_group(groups, labels, scores, relevant, k),
+               "recall": recall_by_group(groups, labels, scores, relevant, k)}
+        if graded is not None:
+            run["graded_ndcg"] = graded_ndcg(groups, graded[0], scores, graded[1], k)
+        runs.append(run)
     return runs
 
 
@@ -102,14 +106,25 @@ def compare(table_dir, a_dirs, b_dirs, k=12, samples=2000, seed=0, output=None, 
         buckets = viewers.loc[data["user_id"][starts], "history_bucket"].to_numpy()
     else:
         buckets = history_bucket(data["user_log_history_length"][starts])
-    runs = {"a": per_viewer(a_dirs, data, groups, relevant, k), "b": per_viewer(b_dirs, data, groups, relevant, k)}
+    graded = None
+    try:
+        movies = pq.read_table(Path(table_dir) / "rows.parquet", columns=["movie_id"])["movie_id"].to_numpy(zero_copy_only=False)
+        row_ratings, ideal = table_ratings(table_dir, data["user_id"], movies)
+        graded = (graded_gain(row_ratings) * (row_ratings >= 4.0), [ideal.get(u, np.zeros(0)) for u in data["user_id"][starts]])
+    except ValueError as error:
+        if "window export" not in str(error):
+            raise
+    runs = {"a": per_viewer(a_dirs, data, groups, relevant, k, graded),
+            "b": per_viewer(b_dirs, data, groups, relevant, k, graded)}
     rng = np.random.default_rng(seed)
     report = {"table": str(table_dir), "table_rows_sha256": manifest["rows_sha256"], "k": k,
               "a": a_dirs, "b": b_dirs, "bootstrap_samples": samples,
               "availability": availability, "missing_at_evaluation": list(hidden),
               "method": "per-viewer B minus A, viewers resampled with replacement; seed repeats averaged per viewer",
               "scores": {}, "difference": {}, "seed_spread": {}}
-    for metric in ("ndcg", "recall"):
+    for metric in ("ndcg", "recall", "graded_ndcg"):
+        if metric not in runs["a"][0]:
+            continue
         mean = {side: np.mean([run[metric] for run in runs[side]], axis=0) for side in runs}
         report["scores"][f"{metric}_at_{k}"] = {side: float(mean[side].mean()) for side in mean}
         report["seed_spread"][f"{metric}_at_{k}"] = {

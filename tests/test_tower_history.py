@@ -90,3 +90,11 @@ def test_interest_groups_separate_distinct_genres():
     single = history_batch(config, 4, [[0]], [[4]], [[0]], [0], [[]])
     out = model.encode_user(torch.zeros(1, 3), single)
     assert torch.isfinite(out).all()
+
+
+def test_target_ratings_found_in_positive_history():
+    from trustworthy_recsys.retrieval.train import target_ratings
+    inputs = SimpleNamespace(has_preference_history=True, positive_offsets=np.array([0, 2, 4]),
+                             positive_items=np.array([5, 7, 7, 1]), positive_ratings=np.array([4, 5, 4.5, 4.0]),
+                             pair_users=np.array([0, 1, 1]), target_items=np.array([7, 7, 1]))
+    assert target_ratings(inputs).tolist() == [5, 4.5, 4.0]

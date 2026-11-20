@@ -81,3 +81,25 @@ def test_history_aware_towers_run_through_development(run, tmp_path):
     towers = json.loads((tmp_path / "workflow" / "development" / "towers" / "training.json").read_text())
     assert towers["architecture"]["history"]["pooling"] == "learned" and "softplus" in towers["loss"]
     assert result["report"]["lambdarank/all"] >= 0
+
+
+def test_five_star_weighting_and_graded_ndcg(run, tmp_path):
+    settings = json.loads(json.dumps(TINY))
+    settings["tower"]["five_star_weight"] = 2.0
+    settings["reranker"]["five_star_weight"] = 3.0
+    run_stage("development", run, tmp_path / "workflow", settings, scenario="calendar")
+    report = json.loads((tmp_path / "workflow" / "development" / "dev_report.json").read_text())
+    assert "graded_ndcg_at_12" in report["metrics"]["lambdarank/all"]
+    reranker = json.loads((tmp_path / "workflow" / "development" / "reranker" / "training.json").read_text())
+    assert reranker["params"]["label_gain"] == [0.0, 1.0, 3.0] and reranker["fit_labels"].startswith("graded")
+    towers = json.loads((tmp_path / "workflow" / "development" / "towers" / "training.json").read_text())
+    assert towers["five_star_weight"] == 2.0
+
+
+def test_dislike_threshold_flows_to_inputs_and_tables(run, tmp_path):
+    settings = json.loads(json.dumps(TINY))
+    settings["dislike_threshold"] = 2.5
+    run_stage("development", run, tmp_path / "workflow", settings, scenario="calendar")
+    inputs = json.loads((tmp_path / "workflow" / "development" / "inputs_a" / "metadata.json").read_text())
+    table = json.loads((tmp_path / "workflow" / "development" / "table_dev" / "manifest.json").read_text())
+    assert inputs["dislike_threshold"] == table["dislike_threshold"] == 2.5

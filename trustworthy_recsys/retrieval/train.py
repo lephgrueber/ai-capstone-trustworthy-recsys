@@ -98,14 +98,30 @@ class PairHistory:
         return np.where(has,np.asarray(self.inputs.negative_items)[np.maximum(self.neg_end[pairs]-1,0)] if len(self.inputs.negative_items) else -1,-1)
 
 
-def selection_score(recommender,records,k,as_of=None):
-    return float(np.mean([recall_at_k(r['relevant_items'],recommender(request_from_record(r,as_of),k),k) for r in records]))
+def target_ratings(inputs):
+    """Star rating of each training pair's target, looked up in the viewer's positives."""
+    if not inputs.has_preference_history:
+        raise ValueError('Five-star weighting needs model inputs version 1.1+')
+    counts=np.diff(np.asarray(inputs.positive_offsets))
+    owner=np.repeat(np.arange(len(counts),dtype=np.int64),counts)
+    keys=(owner<<32)+np.asarray(inputs.positive_items,dtype=np.int64)
+    order=np.argsort(keys,kind='stable')
+    query=(np.asarray(inputs.pair_users,dtype=np.int64)<<32)+np.asarray(inputs.target_items,dtype=np.int64)
+    position=order[np.searchsorted(keys[order],query)]
+    if not np.array_equal(keys[position],query):
+        raise ValueError('Training target missing from positive history')
+    return np.asarray(inputs.positive_ratings)[position]
+
+
+def selection_score(recommender,records,k,as_of=None,dislike_threshold=2.0):
+    return float(np.mean([recall_at_k(r['relevant_items'],recommender(request_from_record(r,as_of,dislike_threshold),k),k)
+                          for r in records]))
 
 
 def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=42,
           embedding_dim=32,max_pairs=0,validation_users=0,threads=2,selection_examples=None,
           selection_k=500,select=True,temperature=.1,history=None,dislike_penalty=0.0,movie_side=None,
-          export_as_of=None):
+          export_as_of=None,five_star_weight=None):
     """`movie_side`: MovieSideConfig fields (metadata/tag dirs and which inputs to use).
     `export_as_of`: Unix seconds for the saved item vectors' tag summaries (default: the
     end of the fitting window)."""
@@ -164,6 +180,10 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
         pad=torch.zeros(stacked.shape[0],1,stacked.shape[2])
         snapshots=(stamps,torch.cat([stacked,pad],dim=1))
     pair_history=PairHistory(inputs,history_config) if history_config.active or dislike_penalty else None
+    example_weights=None
+    if five_star_weight:
+        # Weight each example by its target's stars: five-star targets count five_star_weight.
+        example_weights=np.where(target_ratings(inputs)>=5.0,float(five_star_weight),1.0).astype('float32')
     dense=torch.optim.AdamW(model.dense_parameters(),lr=learning_rate,weight_decay=1e-4)
     sparse=torch.optim.SparseAdam(model.sparse_parameters(),lr=learning_rate)
     root.mkdir(parents=True)
@@ -183,7 +203,7 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
             'validation_sha256':hashes(validation_path)['sha256'] if select else None,'torch_version':torch.__version__,
             'code':code_provenance(),'loss':'in-batch sampled softmax, empirical target-frequency logQ; historical positives and duplicate targets masked'
                     +(f'; + {dislike_penalty} x softplus((s(latest earlier dislike) - s(target)) / T)' if dislike_penalty else ''),
-            'history':asdict(history_config),'dislike_penalty':dislike_penalty,
+            'history':asdict(history_config),'dislike_penalty':dislike_penalty,'five_star_weight':five_star_weight,
             'movie_side':None if side is None else {**asdict(side.config),'sources':side.sources},
             'export_as_of_utc':pd.Timestamp(export_as_of,unit='s',tz='UTC').isoformat()}
     best=-1.0
@@ -215,7 +235,11 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
             logits=user_vectors @ target_vectors.T / temperature
             logits=logits-log_q[target_tensor][None,:]
             logits=logits.masked_fill(torch.from_numpy(negative_mask(inputs,batch,target)),float('-inf'))
-            loss=F.cross_entropy(logits,torch.arange(len(batch)))
+            if example_weights is None:
+                loss=F.cross_entropy(logits,torch.arange(len(batch)))
+            else:
+                weights=torch.from_numpy(example_weights[batch])
+                loss=(F.cross_entropy(logits,torch.arange(len(batch)),reduction='none')*weights).sum()/weights.sum()
             if dislike_penalty:
                 # Penalize a liked target scoring below the viewer's latest earlier dislike.
                 disliked=pair_history.latest_dislike(batch)
@@ -239,7 +263,7 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
         if select:
             model.set_as_of(as_of)
             recommender=RetrievalRecommender(inputs,model,ExactIndex(model.all_item_vectors()))
-            score=selection_score(recommender,validation,selection_k,as_of)
+            score=selection_score(recommender,validation,selection_k,as_of,inputs.meta.get('dislike_threshold',2.0))
         result={'epoch':epoch+1,'mean_training_loss':loss_sum/trained,'pairs_seen':trained,
                 f'validation_recall_at_{selection_k}':score,'seconds':time.perf_counter()-epoch_started,
                 'training_seconds':train_seconds,'updates':-(-len(selected)//batch_size)*(epoch+1)}
@@ -280,12 +304,13 @@ def main():
     p.add_argument('--history',type=json.loads,default=None,
                    help='Viewer-tower history JSON, e.g. \'{"favorites": true, "pooling": "recency", "dislikes": true}\'')
     p.add_argument('--dislike-penalty',type=float,default=0.0)
+    p.add_argument('--five-star-weight',type=float,help='Loss weight of five-star targets (other likes = 1)')
     p.add_argument('--movie-side',type=json.loads,default=None,
                    help='Movie metadata JSON, e.g. \'{"metadata_dir": "...", "tags_dir": "...", "credits": true, "runtime": true, "tags": true}\'')
     a=p.parse_args()
     train(a.inputs_dir,a.output_dir,a.epochs,a.batch_size,a.learning_rate,a.seed,a.embedding_dim,a.max_pairs,
           a.validation_users,a.threads,a.selection_examples,a.selection_k,not a.no_selection,a.temperature,
-          a.history,a.dislike_penalty,a.movie_side)
+          a.history,a.dislike_penalty,a.movie_side,None,a.five_star_weight)
 
 
 if __name__=='__main__':

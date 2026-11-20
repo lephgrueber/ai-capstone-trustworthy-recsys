@@ -486,6 +486,8 @@ def main():
     parser.add_argument("--max-targets-per-user", type=int, default=4)
     parser.add_argument("--partitions", nargs="+", default=["train"],
                         help="Pipeline partitions to draw the fitting window from")
+    parser.add_argument("--dislike-threshold", type=float, default=2.0,
+                        help="Ratings at or below this count as dislikes")
     parser.add_argument("--window-end", type=int,
                         help="Exclusive Unix-second end of the fitting window (e.g. Train A end)")
     args = parser.parse_args()
@@ -498,6 +500,7 @@ def main():
                 args.max_targets_per_user,
                 tuple(args.partitions),
                 args.window_end,
+                args.dislike_threshold,
             ),
             indent=2,
         )

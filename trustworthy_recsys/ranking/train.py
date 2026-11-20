@@ -157,7 +157,8 @@ def select_rounds(booster, valid, features, k, grid):
 
 def train(table_dir, output_dir, drop_features=(), holdout=0.1, seed=42, rounds=2000,
           early_stopping=100, threads=4, params=None, retrieval_model_dir=None,
-          valid_table_dir=None, display_k=12, grid_points=40, mask_features=None, valid_mask=()):
+          valid_table_dir=None, display_k=12, grid_points=40, mask_features=None, valid_mask=(),
+          five_star_weight=None):
     """Fit and save a reranker.
 
     `retrieval_model_dir` (the model that generated the table's candidates) is recorded
@@ -182,8 +183,15 @@ def train(table_dir, output_dir, drop_features=(), holdout=0.1, seed=42, rounds=
                      **retrieval_fingerprint(retrieval_model_dir)}
     table = mask_columns(load_columns(rows, features), mask_features, seed)
     if valid_table_dir is not None or holdout == 0:
+        if five_star_weight:
+            # Graded fitting labels: five-star likes count `five_star_weight` times a like.
+            from .labels import five_star_labels, table_ratings
+            movies = pq.read_table(rows, columns=["movie_id"])["movie_id"].to_numpy(zero_copy_only=False)
+            table["label"] = five_star_labels(table_ratings(table_dir, table["user_id"], movies)[0])
+            params = {**(params or {}), "label_gain": [0.0, 1.0, float(five_star_weight)]}
         return _train_full(table, manifest, features, out, table_dir, valid_table_dir, rounds, seed, threads,
-                           params, retrieval, drop_features, display_k, grid_points, mask_features, valid_mask)
+                           params, retrieval, drop_features, display_k, grid_points, mask_features, valid_mask,
+                           five_star_weight)
     held = holdout_mask(table["user_id"], holdout, seed)
     fit, fit_users, fit_skipped = ranking_dataset(table, features, ~held)
     valid, valid_users, valid_skipped = ranking_dataset(table, features, held, reference=fit)
@@ -234,7 +242,8 @@ def _verified_table(table_dir):
 
 
 def _train_full(table, manifest, features, out, table_dir, valid_table_dir, rounds, seed, threads,
-                params, retrieval, drop_features, display_k, grid_points, mask_features=None, valid_mask=()):
+                params, retrieval, drop_features, display_k, grid_points, mask_features=None, valid_mask=(),
+                five_star_weight=None):
     """Fit on every table user with a hit; choose rounds on a separate dev table if given."""
     valid_manifest = None
     if valid_table_dir is not None:
@@ -285,6 +294,7 @@ def _train_full(table, manifest, features, out, table_dir, valid_table_dir, roun
         "params": config, "rounds": rounds, "best_iteration": best, "display_k": display_k,
         "selection": selection, "holdout": None,
         "masked_features": {"fit": mask_features or {}, "dev": list(valid_mask)},
+        "fit_labels": f"graded: like 1, five-star like gain {five_star_weight}" if five_star_weight else "binary",
         "users": {"fit": fit_users, "fit_skipped_no_positive": fit_skipped},
         "feature_importance_gain": dict(sorted(
             ((name, float(value)) for name, value in zip(features, gain)), key=lambda item: -item[1])),
@@ -315,6 +325,7 @@ def main():
     p.add_argument("--truncation-level", type=int, help="LambdaRank truncation level (default 30)")
     p.add_argument("--mask-features", type=json.loads, default=None,
                    help='Fit with features missing for a share of viewers, e.g. \'{"user_log_rating_count": 1.0}\'')
+    p.add_argument("--five-star-weight", type=float, help="LambdaRank gain for five-star likes (likes = 1)")
     p.add_argument("--availability", default=None,
                    help="Dev requests carry only the values this app version could compute (features.AVAILABILITY)")
     a = p.parse_args()
@@ -322,7 +333,8 @@ def main():
     result = train(a.table_dir, a.output_dir, a.drop_features, a.holdout, a.seed, a.rounds, a.early_stopping, a.threads,
                    params=params, retrieval_model_dir=a.retrieval_model_dir, valid_table_dir=a.valid_table_dir,
                    display_k=a.display_k, mask_features=a.mask_features,
-                   valid_mask=AVAILABILITY[a.availability] if a.availability else ())
+                   valid_mask=AVAILABILITY[a.availability] if a.availability else (),
+                   five_star_weight=a.five_star_weight)
     print(json.dumps({k: result[k] for k in ("best_iteration", "holdout", "selection", "users", "training_seconds")
                       if k != "selection" or result[k] is None} | (
         {"selection": {k: result["selection"][k] for k in ("best_rounds", "best_ndcg", "two_tower_order_ndcg")}}

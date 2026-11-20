@@ -72,14 +72,15 @@ def popularity_order(features):
     return np.lexsort((np.arange(len(counts)), -counts))
 
 
-def build_rows(rec, features, examples, depth, progress_every=1000, popularity=None, as_of=None):
+def build_rows(rec, features, examples, depth, progress_every=1000, popularity=None, as_of=None,
+               dislike_threshold=2.0):
     """Yield per-viewer column blocks; labels are only read after features are built."""
     started = time.perf_counter()
     for count, example in enumerate(examples, start=1):
         user_id = _field(example, "user_id")
         history = list(_field(example, "history_items"))
         exclude = tuple(_field(example, "other_rated_items"))
-        request = (request_from_record(example, as_of) if isinstance(example, dict)
+        request = (request_from_record(example, as_of, dislike_threshold) if isinstance(example, dict)
                    else RecommendationRequest(user_id, history, exclude, as_of=as_of))
         indices, scores, fallback = rec.recommend_scored(request, depth)
         # Legacy examples carry no rating detail, so dislikes are unknown (NaN), not zero.
@@ -149,7 +150,8 @@ def load_examples(examples_path, max_users=0, seed=42):
 
 
 def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, max_users=0, seed=42, threads=2,
-          metadata_dir=None, tags_dir=None):
+          metadata_dir=None, tags_dir=None, dislike_threshold=None):
+    """`dislike_threshold` defaults to the one the tower inputs were prepared with."""
     out = Path(output_dir)
     if out.exists():
         raise ValueError("Output directory already exists; choose a new directory")
@@ -184,7 +186,9 @@ def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, 
     out.mkdir(parents=True)
     (out / "INCOMPLETE").write_text("Reranker table build in progress.\n")
     started = time.perf_counter()
-    blocks = list(build_rows(rec, features, examples, depth, popularity=popularity_order(features), as_of=cutoff))
+    dislike_threshold = inputs.meta.get("dislike_threshold", 2.0) if dislike_threshold is None else dislike_threshold
+    blocks = list(build_rows(rec, features, examples, depth, popularity=popularity_order(features), as_of=cutoff,
+                             dislike_threshold=dislike_threshold))
     table = to_table(blocks)
     users = to_users_table(blocks)
     del blocks
@@ -211,6 +215,7 @@ def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, 
         "feature_cutoff_utc": feature_cutoff,
         "feature_partitions": list(partitions),
         "feature_sources": source_record(metadata_dir, tags_dir),
+        "dislike_threshold": dislike_threshold,
         "tower_cutoff_utc": inputs.meta["training_cutoff_utc"],
         "window": None if window is None else {k: window[k] for k in
                                                ("history_end_utc", "label_start_utc", "label_end_utc")},
