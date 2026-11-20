@@ -441,6 +441,10 @@ def main():
     parser.add_argument("--scenario", default="ratio_80_10_10")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--max-targets-per-user", type=int, default=4)
+    parser.add_argument("--partitions", nargs="+", default=["train"],
+                        help="Pipeline partitions to draw the fitting window from")
+    parser.add_argument("--window-end", type=int,
+                        help="Exclusive Unix-second end of the fitting window (e.g. Train A end)")
     args = parser.parse_args()
     print(
         json.dumps(
@@ -449,6 +453,8 @@ def main():
                 args.scenario,
                 args.output_dir,
                 args.max_targets_per_user,
+                tuple(args.partitions),
+                args.window_end,
             ),
             indent=2,
         )

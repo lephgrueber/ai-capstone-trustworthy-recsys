@@ -49,12 +49,18 @@ class LambdaRankReranker:
             raise ValueError("reranker was trained with a different retrieval model")
         if training["feature_cutoff_utc"] != retrieval_inputs.meta["training_cutoff_utc"]:
             raise ValueError("reranker feature cutoff does not match retrieval training cutoff")
-        if hashes(Path(run_dir) / scenario / "train.parquet")["sha256"] != retrieval_inputs.meta["source_hashes"][f"{scenario}/train.parquet"]:
-            raise ValueError("catalog run training data does not match retrieval inputs")
-        cutoff = int(pd.Timestamp(training["feature_cutoff_utc"]).timestamp())
+        for name, digest in retrieval_inputs.meta["source_hashes"].items():
+            if name.endswith(".parquet") and name != "movies.parquet" and hashes(Path(run_dir) / name)["sha256"] != digest:
+                raise ValueError("catalog run training data does not match retrieval inputs")
+        serving = training.get("serving_features")
+        if serving:
+            # Windowed pipeline: features cover all fitting data (e.g. Final A + Final B).
+            cutoff, partitions = int(pd.Timestamp(serving["end_utc"]).timestamp()), tuple(serving["partitions"])
+        else:
+            cutoff, partitions = int(pd.Timestamp(training["feature_cutoff_utc"]).timestamp()), ("train",)
         features = RankingFeatures.from_run(
             run_dir, scenario, retrieval_inputs.item_ids, retrieval_inputs.item_features, cutoff,
-            threshold=retrieval_inputs.meta["positive_threshold"],
+            partitions=partitions, threshold=retrieval_inputs.meta["positive_threshold"],
         )
         info = ComponentInfo(name="lambdarank", version=f"{root.name}:{manifest_fingerprint(root)}", mode="learned")
         lightgbm_threads(1)  # must precede Booster creation, which parses the model in parallel

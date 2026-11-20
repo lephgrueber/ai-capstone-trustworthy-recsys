@@ -99,3 +99,47 @@ def test_train_and_evaluate_learn_informative_feature(tmp_path):
         handle.write("tamper")
     with pytest.raises(ValueError, match="hash mismatch"):
         evaluate(tmp_path / "test", tmp_path / "model", tmp_path / "again.json")
+
+
+def write_users(path, users=60, seed=0):
+    """users.parquet for a write_table() table, including a popularity list."""
+    table = pq.read_table(path / "rows.parquet").to_pandas()
+    viewers = table.groupby("user_id", sort=False).agg(relevant_count=("user_relevant_count", "first"),
+                                                       candidate_hits=("label", "sum")).reset_index()
+    rng = np.random.default_rng(seed)
+    viewers["history_length"] = np.where(np.arange(len(viewers)) % 2, 0, 30)
+    viewers["history_bucket"] = np.where(viewers["history_length"] == 0, "history_0", "history_21_100")
+    viewers["fallback"] = viewers["history_length"] == 0
+    viewers["popularity_labels"] = [list((rng.random(50) < .05).astype(int)) for _ in range(len(viewers))]
+    pq.write_table(pa.Table.from_pandas(viewers, preserve_index=False), path / "users.parquet")
+    manifest = json.loads((path / "manifest.json").read_text())
+    manifest["users_sha256"] = hashes(path / "users.parquet")["sha256"]
+    manifest["model_manifest_sha256"] = "towers"
+    write_json(path / "manifest.json", manifest)
+
+
+def test_rounds_selected_on_dev_and_fixed_rounds(tmp_path):
+    from trustworthy_recsys.ranking.train import ndcg_by_group
+    write_table(tmp_path / "train_b")
+    write_table(tmp_path / "dev", seed=1)
+    for name in ("train_b", "dev"):
+        write_users(tmp_path / name)
+    result = train(tmp_path / "train_b", tmp_path / "model", rounds=30, threads=1, valid_table_dir=tmp_path / "dev",
+                   params={"min_data_in_leaf": 5, "num_leaves": 7}, grid_points=6)
+    selection = result["selection"]
+    assert selection["viewers"] == 60 and result["holdout"] is None
+    assert str(selection["best_rounds"]) in selection["curve"] and result["best_iteration"] == selection["best_rounds"]
+    assert selection["best_ndcg"] == max(selection["curve"].values()) > selection["two_tower_order_ndcg"]
+    report = evaluate(tmp_path / "dev", tmp_path / "model", tmp_path / "report.json", bootstrap=20)
+    assert report["population"] == "all table users"
+    assert report["viewer_groups"]["history_0"] == 30 and "popularity/all" in report["metrics"]
+    assert "ndcg_at_12" in report["metrics"]["lambdarank/all"]
+    fixed = train(tmp_path / "train_b", tmp_path / "final", rounds=7, holdout=0, threads=1,
+                  params={"min_data_in_leaf": 5, "num_leaves": 7})
+    assert fixed["best_iteration"] == 7 and fixed["selection"] is None
+    with pytest.raises(ValueError, match="must differ"):
+        train(tmp_path / "train_b", tmp_path / "same", rounds=3, threads=1, valid_table_dir=tmp_path / "train_b")
+    # Vectorized NDCG agrees with the repository metric, including a zero-hit viewer.
+    groups = np.array([0, 0, 0, 1, 1])
+    out = ndcg_by_group(groups, np.array([0, 1, 0, 0, 0.]), np.array([.9, .5, .1, 1, 0]), np.array([2, 1]), 2)
+    assert out[0] == pytest.approx(ndcg_at_k({"b", "z"}, ["a", "b", "c"], 2)) and out[1] == 0
