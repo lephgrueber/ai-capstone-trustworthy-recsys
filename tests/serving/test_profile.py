@@ -65,3 +65,15 @@ def test_materially_future_rating_is_rejected_and_small_clock_skew_clamps_to_zer
     }])
     with pytest.raises(ValueError, match="future"):
         derive_model_query(future, None, NOW)
+
+
+def test_model_context_aligns_ratings_times_and_dislikes():
+    preferences = PreferenceState(history_items=["9"],
+                                  ratings=[rating("3", 2.0, 4), rating("4", 3.0, 3), rating("2", 5, 1)])
+    query = derive_model_query(preferences, None, NOW)
+    assert query.history_items == ["9", "2"]
+    # The legacy favorite keeps no fabricated star rating or date.
+    assert query.history_ratings == [None, 5]
+    assert query.history_times == [None, (NOW - timedelta(days=1)).timestamp()]
+    assert query.disliked_items == ["3"]  # 3.0 stars is neither a like nor a dislike
+    assert query.as_of == NOW.timestamp()

@@ -13,8 +13,14 @@ Feature groups:
   co-occurrence with the most recent likes, and year/popularity taste gaps. The two
   towers cannot learn these user x item interactions by construction.
 
-Missing values (unknown user, empty history, unparsable year) are NaN; LightGBM
-learns a default direction for them.
+- tower: max / mean cosine between the candidate's frozen movie-tower vector and the
+  vector of each earlier favorite (one score per favorite, then aggregated).
+- dislikes: log1p(number of explicit dislikes), and the tower and audience cosines
+  against disliked movies, kept separate from the favorite features.
+
+Missing values (unknown user, empty history, unparsable year, no movie vectors attached,
+no dislike information) are NaN; LightGBM learns a default direction for them. A request
+that carries ratings but no dislikes has dislike count 0 and NaN dislike similarities.
 """
 
 from __future__ import annotations
@@ -49,6 +55,15 @@ FEATURE_NAMES = (
     "recent_cosine_mean",
     "year_gap",
     "popularity_gap",
+    # M3 feedback §2: learned similarity and explicit dislikes (appended; older models
+    # select their own columns by name).
+    "tower_cosine_max",
+    "tower_cosine_mean",
+    "dislike_count_log",
+    "dislike_tower_cosine_max",
+    "dislike_tower_cosine_mean",
+    "dislike_audience_cosine_max",
+    "dislike_audience_cosine_mean",
 )
 
 YEAR = re.compile(r"\((\d{4})\)\s*$")
@@ -129,6 +144,7 @@ class RankingFeatures:
                 (cutoff_seconds - last_seen) / SECONDS_PER_DAY,
             ]).astype("float32")
         self.user_map = {user: index for index, user in enumerate(user_ids)}
+        self.item_vectors = None  # frozen movie-tower vectors; attach with attach_item_vectors
 
         # Binary user x item matrix of training positives; columns are item likers.
         self.likes = sparse.csc_matrix(
@@ -174,6 +190,20 @@ class RankingFeatures:
             titles, cutoff_seconds, **options,
         )
 
+    def attach_item_vectors(self, vectors) -> "RankingFeatures":
+        vectors = np.asarray(vectors, dtype="float32")
+        if vectors.shape[0] != len(self.item_ids):
+            raise ValueError("Movie vectors do not match the feature catalog")
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        self.item_vectors = vectors / np.maximum(norms, 1e-12)
+        return self
+
+    def audience_cosine(self, candidates, others):
+        """Cosine between binary liker vectors: shared likers / sqrt(likers A x likers B)."""
+        pair_counts = (self.likes[:, candidates].T @ self.likes[:, others]).toarray()
+        norms = np.sqrt(np.outer(self.positive_counts[candidates], self.positive_counts[others]))
+        return np.divide(pair_counts, norms, out=np.zeros_like(pair_counts, dtype="float64"), where=norms > 0)
+
     @property
     def names(self) -> tuple[str, ...]:
         return FEATURE_NAMES
@@ -183,7 +213,8 @@ class RankingFeatures:
         known = dict.fromkeys(self.item_map[item] for item in history_items if item in self.item_map)
         return np.fromiter(known, dtype=np.int64, count=len(known))
 
-    def build(self, history_items, candidates, retrieval_scores=None, user_id=None, rating_statistics=None) -> np.ndarray:
+    def build(self, history_items, candidates, retrieval_scores=None, user_id=None, rating_statistics=None,
+              disliked_items=None) -> np.ndarray:
         """Return a float32 [len(candidates), len(FEATURE_NAMES)] matrix.
 
         `candidates` are catalog row indices in retrieval order; `retrieval_scores`
@@ -213,8 +244,21 @@ class RankingFeatures:
                 rating_statistics.days_inactive,
             )
             out[:, 10:13] = [np.nan if value is None else value for value in values]
+        if disliked_items is not None:
+            disliked = self.history_indices(disliked_items)
+            out[:, 22] = np.log1p(len(disliked))
+            if len(disliked):
+                disliked = disliked[-self.max_history:]
+                if self.item_vectors is not None:
+                    tower = self.item_vectors[candidates] @ self.item_vectors[disliked].T
+                    out[:, 23], out[:, 24] = tower.max(axis=1), tower.mean(axis=1)
+                audience = self.audience_cosine(candidates, disliked)
+                out[:, 25], out[:, 26] = audience.max(axis=1), audience.mean(axis=1)
         if not len(history):
             return out
+        if self.item_vectors is not None:
+            tower = self.item_vectors[candidates] @ self.item_vectors[history[-self.max_history:]].T
+            out[:, 20], out[:, 21] = tower.max(axis=1), tower.mean(axis=1)
 
         profile = self.item_features[history].mean(axis=0)
         out[:, 13] = self.item_features[candidates] @ profile
@@ -229,10 +273,7 @@ class RankingFeatures:
         out[:, 14] = np.log1p(co)
         out[:, 15] = np.divide(co, popularity, out=np.zeros(n), where=popularity > 0)
 
-        recent = history[-self.recent_likes:]
-        pair_counts = (candidate_likers.T @ self.likes[:, recent]).toarray()
-        norms = np.sqrt(np.outer(popularity, self.positive_counts[recent]))
-        cosine = np.divide(pair_counts, norms, out=np.zeros_like(pair_counts, dtype="float64"), where=norms > 0)
+        cosine = self.audience_cosine(candidates, history[-self.recent_likes:])
         out[:, 16] = cosine.max(axis=1)
         out[:, 17] = cosine.mean(axis=1)
 

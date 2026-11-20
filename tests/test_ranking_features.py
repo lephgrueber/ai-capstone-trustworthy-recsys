@@ -123,3 +123,29 @@ def test_table_labels_mark_held_out_relevant_candidates():
 def test_release_year_parsing():
     assert release_year("Toy Story (1995)") == 1995
     assert np.isnan(release_year("Untitled"))
+
+
+def test_tower_similarity_matches_feedback_example():
+    # Candidate d has cosine 0.8 with favorite a and 0.2 with favorite b.
+    vectors = np.array([[.8, .6], [.2, np.sqrt(1 - .04)], [0, 1], [1, 0]], dtype="float32")
+    features = fitted().attach_item_vectors(vectors)
+    out = features.build(["a", "b"], [3], user_id="u1")
+    assert out[0, COLUMN["tower_cosine_max"]] == pytest.approx(.8)
+    assert out[0, COLUMN["tower_cosine_mean"]] == pytest.approx(.5)  # mean of scores, not of vectors
+    assert np.isnan(fitted().build(["a"], [3])[0, COLUMN["tower_cosine_max"]])  # no vectors attached
+
+
+def test_dislike_features_are_separate_and_missing_is_not_zero():
+    features = fitted().attach_item_vectors(np.eye(4, dtype="float32"))
+    unknown = features.build(["a"], [2, 3])
+    assert np.isnan(unknown[:, COLUMN["dislike_count_log"]]).all()
+    none = features.build(["a"], [2, 3], disliked_items=[])
+    assert (none[:, COLUMN["dislike_count_log"]] == 0).all()
+    assert np.isnan(none[:, COLUMN["dislike_tower_cosine_max"]]).all()
+    some = features.build(["a"], [2, 3], disliked_items=["c"])
+    assert some[0, COLUMN["dislike_count_log"]] == pytest.approx(np.log1p(1))
+    assert some[:, COLUMN["dislike_tower_cosine_max"]].tolist() == [1, 0]
+    # Audience cosine of c with itself: 2 likers shared of 2 -> 1.
+    assert some[0, COLUMN["dislike_audience_cosine_max"]] == pytest.approx(1)
+    # Favorite features are unchanged by dislikes.
+    assert np.array_equal(none[:, :20], some[:, :20], equal_nan=True)

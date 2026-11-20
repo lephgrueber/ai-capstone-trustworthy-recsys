@@ -130,9 +130,14 @@ class LearnedRetrievalAdapter:
             warnings.append(
                 "Unsupported history items were ignored by learned retrieval."
             )
+        keep = [position for position, item in enumerate(query.history_items) if item in self.supported_ids]
         request = BaselineRequest(
             user_id=query.known_user_id or "__new_visitor__",
             history_items=supported_history,
+            history_ratings=tuple(query.history_ratings[i] for i in keep) if query.history_ratings else (),
+            history_times=tuple(query.history_times[i] for i in keep) if query.history_times else (),
+            disliked_items=tuple(item for item in query.disliked_items if item in self.supported_ids),
+            as_of=query.as_of,
         )
         indices, scores, fallback = self.recommender.recommend_scored(request, limit)
         if fallback:

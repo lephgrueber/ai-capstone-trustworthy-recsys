@@ -62,6 +62,8 @@ class LambdaRankReranker:
             run_dir, scenario, retrieval_inputs.item_ids, retrieval_inputs.item_features, cutoff,
             partitions=partitions, threshold=retrieval_inputs.meta["positive_threshold"],
         )
+        # Vectors are already verified by retrieval_fingerprint above.
+        features.attach_item_vectors(np.load(Path(retrieval_model_dir) / "item_embeddings.npy"))
         info = ComponentInfo(name="lambdarank", version=f"{root.name}:{manifest_fingerprint(root)}", mode="learned")
         lightgbm_threads(1)  # must precede Booster creation, which parses the model in parallel
         return cls(lgb.Booster(model_file=str(root / "model.txt")), features, training["features"], info)
@@ -78,8 +80,10 @@ class LambdaRankReranker:
         if any(item.score is not None for item in items):
             scores = np.array([np.nan if item.score is None else item.score for item in items], dtype="float32")
         # Position is the filtered retrieval order; hard filters only remove candidates.
+        # Dislikes are known only for a numeric browser profile (as_of is set with it).
+        disliked = query.disliked_items if query.as_of is not None else None
         matrix = self.features.build(
-            query.history_items, indices, scores, query.known_user_id, query.rating_statistics
+            query.history_items, indices, scores, query.known_user_id, query.rating_statistics, disliked
         )
         predicted = self.booster.predict(matrix[:, self.columns], num_threads=lightgbm_threads(1))
         order = np.argsort(-predicted, kind="stable")[:limit]

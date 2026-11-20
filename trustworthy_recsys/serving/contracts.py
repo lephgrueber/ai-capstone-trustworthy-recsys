@@ -82,11 +82,28 @@ class ModelQuery(StrictModel):
     known_user_id: str | None = Field(default=None, min_length=1, max_length=64)
     rated_movie_ids: list[MovieId] = Field(default_factory=list, max_length=500)
     rating_statistics: RatingStatistics | None = None
+    # Optional model context derived from saved browser ratings (feedback §2-§3). When
+    # present, ratings/times align with history_items; None marks an unknown value
+    # (e.g. a legacy favorite). Times and as_of are Unix seconds.
+    history_ratings: list[float | None] = Field(default_factory=list, max_length=500)
+    history_times: list[float | None] = Field(default_factory=list, max_length=500)
+    disliked_items: list[MovieId] = Field(default_factory=list, max_length=500)
+    as_of: float | None = None
 
-    @field_validator("history_items", "rated_movie_ids")
+    @field_validator("history_items", "rated_movie_ids", "disliked_items")
     @classmethod
     def unique_movie_ids(cls, values: list[str], info):
         return _unique(values, info.field_name)
+
+    @model_validator(mode="after")
+    def aligned_history_context(self):
+        for name in ("history_ratings", "history_times"):
+            values = getattr(self, name)
+            if values and len(values) != len(self.history_items):
+                raise ValueError(f"{name} must align with history_items")
+        if set(self.disliked_items) & set(self.history_items):
+            raise ValueError("a movie cannot be both a favorite and a dislike")
+        return self
 
 
 class ComponentInfo(StrictModel):

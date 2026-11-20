@@ -71,7 +71,9 @@ def build_rows(rec, features, examples, depth, progress_every=1000, popularity=N
         request = (request_from_record(example, as_of) if isinstance(example, dict)
                    else RecommendationRequest(user_id, history, exclude, as_of=as_of))
         indices, scores, fallback = rec.recommend_scored(request, depth)
-        matrix = features.build(history, indices, scores, user_id)
+        # Legacy examples carry no rating detail, so dislikes are unknown (NaN), not zero.
+        disliked = list(request.disliked_items) if isinstance(example, dict) else None
+        matrix = features.build(history, indices, scores, user_id, disliked_items=disliked)
         movie_ids = [rec.inputs.item_ids[index] for index in indices]
         relevant = set(_field(example, "relevant_items"))
         labels = np.array([movie in relevant for movie in movie_ids], dtype="int8")
@@ -155,6 +157,7 @@ def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, 
         run_dir, inputs.meta["scenario"], inputs.item_ids, inputs.item_features,
         cutoff, partitions=partitions, threshold=inputs.meta["positive_threshold"],
     )
+    features.attach_item_vectors(vectors)
     load_seconds = time.perf_counter() - load_started
 
     out.mkdir(parents=True)
