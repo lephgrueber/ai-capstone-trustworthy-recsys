@@ -41,7 +41,28 @@ def grouped_training(path):
         yield str(last), rows
 
 
-def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4):
+def grouped_window(events):
+    """Same shape as grouped_training, from an in-memory windows.Events table."""
+    change = np.flatnonzero(events.user[1:] != events.user[:-1]) + 1
+    for lo, hi in zip(np.concatenate([[0], change]), np.concatenate([change, [len(events)]])):
+        yield str(int(events.user[lo])), [
+            (str(int(i)), float(r), int(t))
+            for i, r, t in zip(events.item[lo:hi], events.rating[lo:hi], events.ts[lo:hi])
+        ]
+
+
+def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4,
+                   partitions=("train",), window_end=None):
+    """Prepare tower inputs from the training partition, or from a chronological window.
+
+    With the defaults the inputs cover the whole pre-validation training partition (M3).
+    `partitions` + `window_end` (Unix seconds, exclusive) select a fitting window such as
+    Train A, Final A or Deployment A (see trustworthy_recsys.data.windows).
+    """
+    from .windows import load_events
+
+    partitions = tuple(partitions)
+    windowed = partitions != ("train",) or window_end is not None
     run, out = Path(run_dir).resolve(), Path(output_dir).resolve()
     if out.exists():
         raise ValueError(
@@ -55,12 +76,16 @@ def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4):
     stats = read_json(run / "statistics.json")
     if scenario not in stats["splits"]:
         raise ValueError(f"Unknown scenario: {scenario}")
-    sources = [
-        "movies.parquet",
-        "statistics.json",
-        f"{scenario}/train.parquet",
-        f"{scenario}/train_item_ids.json",
-    ]
+    sources = (
+        ["movies.parquet", "statistics.json", *(f"{scenario}/{p}.parquet" for p in partitions)]
+        if windowed
+        else [
+            "movies.parquet",
+            "statistics.json",
+            f"{scenario}/train.parquet",
+            f"{scenario}/train_item_ids.json",
+        ]
+    )
     source_hashes = {}
     for name in sources:
         actual = hashes(run / name)["sha256"]
@@ -73,9 +98,18 @@ def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4):
         ).timestamp()
     )
     threshold = manifest["config"]["positive_threshold"]
-    item_ids = sorted(
-        read_json(run / scenario / "train_item_ids.json"), key=int
-    )
+    if windowed:
+        events_table = load_events(run, scenario, partitions, end=window_end)
+        if not len(events_table):
+            raise ValueError("Fitting window contains no ratings")
+        if window_end is None:
+            window_end = int(events_table.ts.max()) + 1
+        cutoff = int(window_end)
+        item_ids = [str(int(x)) for x in np.unique(events_table.item)]
+    else:
+        item_ids = sorted(
+            read_json(run / scenario / "train_item_ids.json"), key=int
+        )
     if not item_ids or len(item_ids) != len(set(item_ids)):
         raise ValueError("Training catalog must be nonempty and unique")
     mapping = {item: i for i, item in enumerate(item_ids)}
@@ -114,7 +148,12 @@ def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4):
         )
     }
     try:
-        for user, events in grouped_training(run / scenario / "train.parquet"):
+        source_users = (
+            grouped_window(events_table)
+            if windowed
+            else grouped_training(run / scenario / "train.parquet")
+        )
+        for user, events in source_users:
             if len({item for item, _, _ in events}) != len(events):
                 raise ValueError("Repeated training user-movie pair")
             if any(stamp >= cutoff for _, _, stamp in events):
@@ -196,10 +235,12 @@ def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4):
         raise ValueError(
             "No training targets have a strictly earlier positive history"
         )
-    if (
-        counts["training_rows"]
-        != stats["splits"][scenario]["partitions"]["train"]["rows"]
-    ):
+    expected_rows = (
+        len(events_table)
+        if windowed
+        else stats["splits"][scenario]["partitions"]["train"]["rows"]
+    )
+    if counts["training_rows"] != expected_rows:
         raise ValueError("Source training row count mismatch")
     np.save(out / "seen_offsets.npy", np.array(offsets, dtype="int64"))
     np.save(
@@ -215,9 +256,12 @@ def prepare_inputs(run_dir, scenario, output_dir, max_targets_per_user=4):
         "scenario": scenario,
         "source_hashes": source_hashes,
         "source_manifest_sha256": hashes(run / "manifest.json")["sha256"],
-        "training_cutoff_utc": stats["splits"][scenario][
-            "validation_start_utc"
-        ],
+        "training_cutoff_utc": pd.Timestamp(cutoff, unit="s", tz="UTC").isoformat(),
+        "window": {
+            "partitions": list(partitions),
+            "end": cutoff,
+            "description": "events in these partitions strictly before training_cutoff_utc",
+        },
         "positive_threshold": threshold,
         "max_targets_per_user": max_targets_per_user,
         "genres": vocabulary,

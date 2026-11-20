@@ -59,6 +59,7 @@ class RetrievalRecommender:
 
     def excluded(self,request):
         seen={self.inputs.item_map[x] for x in request.history_items if x in self.inputs.item_map}
+        seen.update(self.inputs.item_map[x] for x in getattr(request,'exclude_items',()) if x in self.inputs.item_map)
         user=self.inputs.user_map.get(request.user_id)
         if user is not None:
             lo,hi=self.inputs.seen_offsets[user:user+2]

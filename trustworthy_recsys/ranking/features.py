@@ -80,9 +80,16 @@ class RankingFeatures:
         max_history: int = 500,
         recent_likes: int = 5,
     ):
-        """Arrays describe training interactions; timestamps are UTC epoch seconds."""
+        """Arrays describe training interactions; timestamps are UTC epoch seconds.
+
+        An item index of -1 marks a rating of a movie outside the catalog (e.g. first
+        rated after the towers' fitting window): it counts toward the viewer's rating
+        statistics but not toward any movie statistic or co-like signal.
+        """
         if len(timestamps) and int(timestamps.max()) >= cutoff_seconds:
             raise ValueError("Training interactions reach the feature cutoff")
+        item_indices = np.asarray(item_indices, dtype=np.int64)
+        known = item_indices >= 0
         self.item_ids = list(item_ids)
         self.item_map = {item: index for index, item in enumerate(self.item_ids)}
         self.item_features = np.asarray(item_features, dtype="float32")
@@ -90,14 +97,14 @@ class RankingFeatures:
         self.max_history = max_history
         self.recent_likes = recent_likes
         n_items, n_users = len(self.item_ids), len(user_ids)
-        positive = ratings >= threshold
+        positive = (ratings >= threshold) & known
         recent = positive & (timestamps >= cutoff_seconds - recent_days * SECONDS_PER_DAY)
 
-        counts = np.bincount(item_indices, minlength=n_items).astype("float64")
+        counts = np.bincount(item_indices[known], minlength=n_items).astype("float64")
         self.positive_counts = np.bincount(item_indices[positive], minlength=n_items).astype("float64")
         recent_counts = np.bincount(item_indices[recent], minlength=n_items)
-        rating_sums = np.bincount(item_indices, weights=ratings, minlength=n_items)
-        global_mean = float(ratings.mean()) if len(ratings) else 0.0
+        rating_sums = np.bincount(item_indices[known], weights=ratings[known], minlength=n_items)
+        global_mean = float(ratings[known].mean()) if known.any() else 0.0
         years = np.array([release_year(titles.get(item, "")) for item in self.item_ids])
         cutoff_year = pd.Timestamp(cutoff_seconds, unit="s", tz="UTC").year
         self.item_columns = np.column_stack([
@@ -131,18 +138,31 @@ class RankingFeatures:
         )
 
     @classmethod
-    def from_run(cls, run_dir, scenario, item_ids, item_features, cutoff_seconds, **options):
-        """Load training interactions and titles from a completed pipeline run."""
-        table = pq.read_table(
-            f"{run_dir}/{scenario}/train.parquet",
-            columns=["user_id", "movie_id", "rating", "timestamp_utc"],
-        ).combine_chunks()
+    def from_run(cls, run_dir, scenario, item_ids, item_features, cutoff_seconds,
+                 partitions=("train",), **options):
+        """Load interactions before `cutoff_seconds` and titles from a completed pipeline run.
+
+        With the default partition every training interaction must lie inside the
+        catalog (M3 behavior). Passing partitions explicitly (fitting windows) keeps only
+        events before the cutoff and allows movies outside the catalog (see __init__).
+        """
+        windowed = tuple(partitions) != ("train",)
+        table = pa.concat_tables([
+            pq.read_table(f"{run_dir}/{scenario}/{part}.parquet",
+                          columns=["user_id", "movie_id", "rating", "timestamp_utc"])
+            for part in partitions
+        ])
+        stamps = table["timestamp_utc"].cast(pa.int64()).to_numpy() // 1000
+        if windowed or (len(stamps) and stamps.max() >= cutoff_seconds):
+            table = table.filter(pa.array(stamps < cutoff_seconds))
+            windowed = True
+        table = table.combine_chunks()
         users = pc.dictionary_encode(table["user_id"]).combine_chunks()
         movies = pc.dictionary_encode(table["movie_id"]).combine_chunks()
         item_map = {item: index for index, item in enumerate(item_ids)}
         lookup = np.array([item_map.get(item, -1) for item in movies.dictionary.to_pylist()], dtype=np.int64)
         item_indices = lookup[movies.indices.to_numpy()]
-        if (item_indices < 0).any():
+        if not windowed and (item_indices < 0).any():
             raise ValueError("Training interaction outside the retrieval catalog")
         timestamps = table["timestamp_utc"].cast(pa.int64()).to_numpy() // 1000
         movie_table = pq.read_table(f"{run_dir}/movies.parquet", columns=["movie_id", "title"])

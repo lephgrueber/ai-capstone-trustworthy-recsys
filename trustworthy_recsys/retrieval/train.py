@@ -1,4 +1,10 @@
-"""Train on historical prefixes; select checkpoints using validation, never test."""
+"""Train on historical prefixes; select checkpoints using dev, never test.
+
+Selection (M3 feedback §1): macro Recall@500 over *every* viewer in a dev example file
+(default: the window export dev.jsonl when given, else the run's validation_warm.jsonl).
+With ``select=False`` (final refit / deployment fit) no labels are read: the towers train
+for exactly ``epochs`` epochs and the last checkpoint is kept.
+"""
 
 import argparse
 import hashlib
@@ -8,12 +14,14 @@ from pathlib import Path
 import time
 
 import numpy as np
+import pandas as pd
 import torch
 from torch.nn import functional as F
 
 from eval.harness import RecommendationRequest
 from trustworthy_recsys.evaluation.metrics import recall_at_k
 from trustworthy_recsys.data.retrieval_inputs import ModelInputs
+from trustworthy_recsys.data.windows import load_records, read_window_meta
 from trustworthy_recsys.data.reporting import hashes, write_json, code_provenance
 from .model import TwoTower, load_model
 from .index import ExactIndex
@@ -47,9 +55,20 @@ def negative_mask(inputs,pair_indices,targets):
     return mask
 
 
+def selection_request(record):
+    return RecommendationRequest(record['user_id'],record['history_items'],tuple(record.get('other_rated_items',())))
+
+
+def selection_score(recommender,records,k):
+    return float(np.mean([recall_at_k(r['relevant_items'],recommender(selection_request(r),k),k) for r in records]))
+
+
 def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=42,
-          embedding_dim=32,max_pairs=0,validation_users=512,threads=2):
-    if min(epochs,batch_size,validation_users,threads,embedding_dim)<=0 or batch_size<2 or learning_rate<=0 or max_pairs<0:
+          embedding_dim=32,max_pairs=0,validation_users=0,threads=2,selection_examples=None,
+          selection_k=500,select=True,temperature=.1):
+    """`validation_users=0` scores every selection viewer; a positive value hash-samples them."""
+    if min(epochs,batch_size,threads,embedding_dim,selection_k)<=0 or validation_users<0 or batch_size<2 \
+            or learning_rate<=0 or max_pairs<0 or temperature<=0:
         raise ValueError('Invalid training configuration')
     root=Path(output_dir)
     if root.exists():
@@ -58,15 +77,25 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
     torch.manual_seed(seed)
     torch.use_deterministic_algorithms(True)
     inputs=ModelInputs(inputs_dir,verify=True)
-    source=Path(inputs.meta['source_run'])
-    validation_path=source/inputs.meta['scenario']/'validation_warm.jsonl'
-    source_manifest=json.loads((source/'manifest.json').read_text())
-    relative=validation_path.relative_to(source).as_posix()
-    if hashes(validation_path)['sha256']!=source_manifest['outputs'][relative]['sha256']:
-        raise ValueError('Validation input hash mismatch')
-    validation=sampled_examples(validation_path,validation_users,seed)
-    if not validation:
-        raise ValueError('No warm validation examples available for checkpoint selection')
+    validation,validation_path=[],None
+    if select:
+        validation_path=Path(selection_examples) if selection_examples else None
+        if validation_path is None:
+            source=Path(inputs.meta['source_run'])
+            validation_path=source/inputs.meta['scenario']/'validation_warm.jsonl'
+            source_manifest=json.loads((source/'manifest.json').read_text())
+            relative=validation_path.relative_to(source).as_posix()
+            if hashes(validation_path)['sha256']!=source_manifest['outputs'][relative]['sha256']:
+                raise ValueError('Validation input hash mismatch')
+        else:
+            window=read_window_meta(validation_path)
+            cutoff=int(pd.Timestamp(inputs.meta['training_cutoff_utc']).timestamp())
+            if window is not None and window['label_start']<cutoff:
+                raise ValueError('Selection labels overlap the towers\' fitting window')
+        validation=(sampled_examples(validation_path,validation_users,seed) if validation_users
+                    else list(load_records(validation_path)))
+        if not validation:
+            raise ValueError('No dev examples available for checkpoint selection')
     n=len(inputs.target_items)
     rng=np.random.default_rng(seed)
     selected=np.sort(rng.choice(n,size=min(max_pairs,n),replace=False)) if max_pairs else np.arange(n)
@@ -80,14 +109,18 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
     root.mkdir(parents=True)
     (root/'INCOMPLETE').write_text('Training/embedding export in progress.\n')
     np.save(root/'training_pair_indices.npy',selected)
-    write_json(root/'validation_user_ids.json',[record['user_id'] for record in validation])
+    if validation_users:
+        write_json(root/'validation_user_ids.json',[record['user_id'] for record in validation])
     config={'architecture':model.config,'epochs':epochs,'batch_size':batch_size,'learning_rate':learning_rate,
-            'seed':seed,'threads':threads,'device':'cpu','temperature':.1,'log_q_correction':True,
+            'seed':seed,'threads':threads,'device':'cpu','temperature':temperature,'log_q_correction':True,
             'available_training_pairs':n,'selected_training_pairs':len(selected),'max_pairs':max_pairs,
-            'validation_population':'validation_warm','validation_users':len(validation),
-            'selection_metric':'macro Recall@100 on deterministic validation user sample',
+            'validation_population':str(validation_path) if select else None,
+            'validation_users':len(validation),'validation_sampled':bool(validation_users),
+            'selection_metric':f'macro Recall@{selection_k} over every selection viewer' if select and not validation_users
+                else f'macro Recall@{selection_k} on deterministic hash sample' if select
+                else 'none: fixed epochs, last checkpoint (labels never read)',
             'input_manifest_sha256':hashes(Path(inputs_dir)/'manifest.json')['sha256'],
-            'validation_sha256':hashes(validation_path)['sha256'],'torch_version':torch.__version__,
+            'validation_sha256':hashes(validation_path)['sha256'] if select else None,'torch_version':torch.__version__,
             'code':code_provenance(),'loss':'in-batch sampled softmax, empirical target-frequency logQ; historical positives and duplicate targets masked'}
     best=-1.0
     records=[]
@@ -107,7 +140,7 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
             target_tensor=torch.from_numpy(target)
             dense.zero_grad(set_to_none=True)
             sparse.zero_grad(set_to_none=True)
-            logits=model.encode_user(features) @ model.encode_item(target_tensor).T / .1
+            logits=model.encode_user(features) @ model.encode_item(target_tensor).T / temperature
             logits=logits-log_q[target_tensor][None,:]
             logits=logits.masked_fill(torch.from_numpy(negative_mask(inputs,batch,target)),float('-inf'))
             loss=F.cross_entropy(logits,torch.arange(len(batch)))
@@ -118,22 +151,24 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
             sparse.step()
             loss_sum+=float(loss.detach())*len(batch)
             trained+=len(batch)
-        vectors=model.all_item_vectors()
-        index=ExactIndex(vectors)
-        recommender=RetrievalRecommender(inputs,model,index)
-        score=float(np.mean([recall_at_k(record['relevant_items'],recommender(RecommendationRequest(record['user_id'],record['history_items']),100),100) for record in validation]))
+        train_seconds=time.perf_counter()-epoch_started
+        score=None
+        if select:
+            recommender=RetrievalRecommender(inputs,model,ExactIndex(model.all_item_vectors()))
+            score=selection_score(recommender,validation,selection_k)
         result={'epoch':epoch+1,'mean_training_loss':loss_sum/trained,'pairs_seen':trained,
-                'validation_recall_at_100':score,'seconds':time.perf_counter()-epoch_started}
+                f'validation_recall_at_{selection_k}':score,'seconds':time.perf_counter()-epoch_started,
+                'training_seconds':train_seconds,'updates':-(-len(selected)//batch_size)*(epoch+1)}
         records.append(result)
         print(json.dumps(result),flush=True)
-        if score>best:
-            best=score
+        if not select or score>best:
+            best=score if select else best
             config['selected_epoch']=epoch+1
             torch.save({'config':model.config,'state_dict':model.state_dict()},root/'model.pt')
     model=load_model(root/'model.pt',inputs.item_features)
     vectors=model.all_item_vectors()
     np.save(root/'item_embeddings.npy',vectors)
-    config.update({'training_seconds':time.perf_counter()-started,'best_validation_recall_at_100':best,
+    config.update({'training_seconds':time.perf_counter()-started,f'best_validation_recall_at_{selection_k}':best if select else None,
                    'epochs_log':records,'index':{'kind':'not yet published; run retrieval.publish'},
                    'checkpoint_search':'exact NumPy cosine; production retrieval uses Weaviate'})
     write_json(root/'training.json',config)
@@ -152,10 +187,15 @@ def main():
     p.add_argument('--seed',type=int,default=42)
     p.add_argument('--embedding-dim',type=int,default=32)
     p.add_argument('--max-pairs',type=int,default=0,help='0 trains on every prepared pair')
-    p.add_argument('--validation-users',type=int,default=512)
+    p.add_argument('--validation-users',type=int,default=0,help='0 scores every selection viewer')
     p.add_argument('--threads',type=int,default=2)
+    p.add_argument('--selection-examples',type=Path,help='Dev window export, e.g. <windows>/dev.jsonl')
+    p.add_argument('--selection-k',type=int,default=500)
+    p.add_argument('--no-selection',action='store_true',help='Final refit: train fixed epochs, keep the last')
+    p.add_argument('--temperature',type=float,default=.1)
     a=p.parse_args()
-    train(a.inputs_dir,a.output_dir,a.epochs,a.batch_size,a.learning_rate,a.seed,a.embedding_dim,a.max_pairs,a.validation_users,a.threads)
+    train(a.inputs_dir,a.output_dir,a.epochs,a.batch_size,a.learning_rate,a.seed,a.embedding_dim,a.max_pairs,
+          a.validation_users,a.threads,a.selection_examples,a.selection_k,not a.no_selection,a.temperature)
 
 
 if __name__=='__main__':

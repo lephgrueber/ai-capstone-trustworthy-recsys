@@ -39,6 +39,8 @@ class RecommendationRequest:
 
     user_id: str
     history_items: list[str]
+    # Other movies the viewer already rated (any value); recommenders exclude them.
+    exclude_items: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
