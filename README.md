@@ -12,7 +12,7 @@ for the application components and data flow.
 
 ## Demo video and outline
 
-**90-second demo video:** `https://drive.google.com/file/d/1Yx0TjQPGXeTxcGkjtcRRegXzClrlsdUU/view?usp=sharing`
+**90-second demo video:** [Click here to watch](https://drive.google.com/file/d/1Yx0TjQPGXeTxcGkjtcRRegXzClrlsdUU/view?usp=sharing)
 
 
 ### Demo outline
