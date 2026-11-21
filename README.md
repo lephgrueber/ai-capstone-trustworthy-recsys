@@ -12,40 +12,23 @@ for the application components and data flow.
 
 ## Demo video and outline
 
-**90-second demo video:** `VIDEO_URL_PENDING`
+**90-second demo video:** `https://drive.google.com/file/d/1Yx0TjQPGXeTxcGkjtcRRegXzClrlsdUU/view?usp=sharing`
 
-Recording/publication is pending. Replace this placeholder with a publicly viewable
-unlisted YouTube or Vimeo link, then check that it opens without signing in. This README
-serves as the project page; the placeholder is not evidence of a published video.
 
-### Screen-capture sequence (90 seconds)
+### Demo outline
 
-Record the application in **learned mode**, using a compatible saved two-tower model,
-Weaviate index, and LambdaRank reranker. Prepare the app and evidence tabs before recording;
-keep credentials and personal feedback logs off screen.
+The planned screen capture follows the end-to-end flow in **learned mode**, using the
+saved two-tower model, Weaviate index, and LambdaRank reranker.
 
-| Time | What to show, in order | Narration outline |
-|---|---|---|
-| 0–10 s | Main page and active model information. | “This is our movie recommendation system. It helps viewers discover movies while making the system's behavior and limitations clear.” |
-| 10–28 s | In **Rate a movie**, search for a title, select it, save a rating of four or five stars, and show the refreshed recommendations. | “I can rate a movie I know. The system uses my saved preferences to find candidates with a two-tower model, searches their embeddings in Weaviate, and reranks the results.” |
-| 28–43 s | Switch to **Find recommendations** and submit “show comedy without horror.” Show the resulting list. | “I can also describe supported preferences in plain language. Genre constraints shape the results, and movies I have already rated are excluded.” |
-| 43–55 s | Use the main-page microphone, review the editable transcript, and submit it. If speech recognition is unavailable, demonstrate typed entry and identify the limitation. | “Voice input lets me enter the same request by speaking. I can review the text before submitting it, and typing remains available.” |
-| 55–68 s | Open a recommended movie's details, then refresh the page to show the saved rating remains. | “I can explore a recommendation and keep my ratings between visits in this browser. Saving a rating updates my profile; it does not retrain the model.” |
-| 68–83 s | Briefly show the saved-model ranking table and ANN comparison linked below. | “We evaluate the full recommendation flow. Reranking improved ordering in the reported benchmark. Approximate search closely matched exact results, but was slower at this catalog size.” |
-| 83–90 s | Return to the app, with the evaluation/documentation links visible in a prepared README tab if needed. | “The project combines usable recommendations with reproducible checks. Our separate off-policy evaluation work supports careful future experiments; it does not yet establish improved movie engagement.” |
-
-### Research findings and storyline
-
-These are the figures and tables to feature in the recording or accompanying presentation.
-Use their stated populations and measurement conditions; the saved-model benchmarks are
-not results for a newly trained M3-feedback model.
-
-| Evidence to show | Finding it supports | Place in the story |
-|---|---|---|
-| [Application architecture diagram](docs/application_architecture.md) | Connects browser input, the API, retrieval, Weaviate, and reranking. | Explain how a preference becomes a recommendation. |
-| [Retrieval quality table](docs/retrieval_report.md) and [reranking test table](docs/ranking_report.md#test-results-4310-warm-users) | Compare methods within the same population. For the 4,310 warm test users, reranking raised NDCG@10 from 0.1057 to 0.1204. | Show measured ranking quality, while keeping fallback and cold-start limitations visible. |
-| [ANN overlap and latency table](docs/ann_benchmark.md) | Top-500 overlap with exact results was 99.9618%; Weaviate was slower than exact search in this local benchmark. | Show the measured accuracy/latency trade-off rather than promise a speedup. |
-| [Open Bandit estimates and uncertainty](docs/ope_report.md) | Validation selected the uniform policy; contextual estimates have limited effective sample sizes and wide intervals. | Close with what the evidence does—and does not—support. These fashion-click results are separate from movie-app outcomes. |
+| Focus | On-screen content |
+|---|---|
+| Application overview | Main page, recommendation grid, and active model information. |
+| Rating and personalization | Movie lookup in **Rate a movie**, title selection, a saved positive rating, and refreshed recommendations. |
+| Natural-language search | A request in **Find recommendations**, genre inclusion/exclusion, and the resulting movie list. |
+| Voice input | Main-page microphone, editable transcript, and request submission; typed-input fallback if speech recognition is unavailable. |
+| Movie exploration and persistence | Recommended movie details and a page refresh showing that the saved rating persists. |
+| Evaluation findings | Saved-model ranking results and ANN agreement/latency comparison, including the measured limitations. |
+| Project resources and next steps | README links to evaluation reports and documentation, with movie-engagement evaluation identified as future evidence. |
 
 ## Project and current status
 
