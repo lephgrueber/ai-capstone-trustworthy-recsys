@@ -22,6 +22,7 @@ import pyarrow.parquet as pq
 
 from trustworthy_recsys.data.reporting import code_provenance, hashes, write_json
 from .train import group_sizes, holdout_mask, lightgbm_threads
+from .population import expand, viewers_for
 
 KS = (10, 12, 20, 50)
 
@@ -115,24 +116,21 @@ def evaluate(table_dir, model_dir, output, ks=KS, bootstrap=1000):
     population = "validation early-stopping holdout users" if same_table else "all table users"
 
     sizes = group_sizes(data["user_id"])
-    starts = np.concatenate([[0], np.cumsum(sizes)[:-1]])
+    starts = np.cumsum(sizes) - sizes
+    row_users = data["user_id"][starts]
     viewers = None
     if (table_dir / "users.parquet").exists() and not same_table:
-        if hashes(table_dir / "users.parquet")["sha256"] != manifest.get("users_sha256"):
-            raise ValueError("Reranker users table hash mismatch")
-        viewers = pq.read_table(table_dir / "users.parquet").to_pandas().set_index("user_id")
-        viewers = viewers.loc[data["user_id"][starts]]
+        viewers = viewers_for(table_dir)
     threads = lightgbm_threads(4)
     booster = lgb.Booster(model_file=str(model_dir / "model.txt"))
-    scores = booster.predict(np.column_stack([data[name] for name in features]), num_threads=threads)
+    scores = (booster.predict(np.column_stack([data[name] for name in features]), num_threads=threads)
+              if len(data["user_id"]) else np.zeros(0))
     labels = data["label"].astype(float)
     relevant = data["user_relevant_count"][starts]
     methods = {
         "pass_through": user_metrics(labels, -data["retrieval_rank"], sizes, relevant, ks),
         "lambdarank": user_metrics(labels, scores, sizes, relevant, ks),
     }
-    if viewers is not None and "popularity_labels" in viewers:
-        methods = {"popularity": popularity_metrics(viewers, ks), **methods}
     graded_k = 12
     try:
         from .labels import graded_ndcg, table_ratings
@@ -150,10 +148,18 @@ def evaluate(table_dir, model_dir, output, ks=KS, bootstrap=1000):
         if "window export" not in str(error):
             raise
         # Legacy tables (no window export with star ratings): binary metrics only.
+    methods = {method: {metric: expand(values, row_users, viewers) for metric, values in per_user.items()}
+               for method, per_user in methods.items()}
+    if viewers is not None and "popularity_labels" in viewers:
+        methods = {"popularity": popularity_metrics(viewers, ks), **methods}
+    population_size = len(viewers) if viewers is not None else len(sizes)
+    if not population_size:
+        raise ValueError("No eligible evaluation viewers")
     buckets = (viewers["history_bucket"].to_numpy() if viewers is not None
                else history_bucket(data["user_log_history_length"][starts]))
-    slices = {"all": np.ones(len(sizes), dtype=bool),
-              "fallback": data["fallback"][starts],
+    slices = {"all": np.ones(population_size, dtype=bool),
+              "fallback": (viewers["fallback"].to_numpy(dtype=bool) if viewers is not None
+                           else data["fallback"][starts]),
               **{name: buckets == name for name in HISTORY_GROUPS}}
     metrics = {f"{method}/{name}": {"users": int(selected.sum()),
                                     **{metric: float(values[selected].mean()) for metric, values in per_user.items()}}
@@ -162,9 +168,12 @@ def evaluate(table_dir, model_dir, output, ks=KS, bootstrap=1000):
     comparison = {metric: paired_bootstrap(methods["lambdarank"][metric], methods["pass_through"][metric], bootstrap)
                   for metric in shared}
     report = {
-        "population": population, "users": int(len(sizes)), "rows": int(len(labels)),
+        "population": population, "users": int(population_size), "rows": int(len(labels)),
+        "empty_candidate_users": int(population_size - len(sizes)),
         "viewer_groups": {name: int(mask.sum()) for name, mask in slices.items()},
-        "candidate_ceiling_recall": float((np.add.reduceat(labels, starts) / relevant).mean()),
+        "candidate_ceiling_recall": float(expand(
+            np.add.reduceat(labels, starts) / relevant if len(sizes) else np.zeros(0),
+            row_users, viewers).mean()),
         "metrics": metrics, "lambdarank_minus_pass_through": comparison,
         "table": str(table_dir), "table_rows_sha256": manifest["rows_sha256"],
         "model": str(model_dir), "model_manifest_sha256": hashes(model_dir / "manifest.json")["sha256"],

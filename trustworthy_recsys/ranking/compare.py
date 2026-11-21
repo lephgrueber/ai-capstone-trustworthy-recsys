@@ -26,6 +26,7 @@ from .evaluate import HISTORY_GROUPS, history_bucket
 from .features import AVAILABILITY
 from .labels import graded_gain, graded_ndcg, table_ratings
 from .train import group_ids, lightgbm_threads, ndcg_by_group
+from .population import expand, viewers_for
 
 PASS_THROUGH = "pass_through"
 
@@ -51,6 +52,8 @@ def model_features(model_dir):
 
 
 def scores_for(model_dir, data):
+    if not len(data["user_id"]):
+        return np.zeros(0)
     if model_dir == PASS_THROUGH:
         return -data["retrieval_rank"].astype(float)
     features = model_features(model_dir)
@@ -111,12 +114,12 @@ def compare(table_dir, a_dirs, b_dirs, k=12, samples=2000, seed=0, output=None, 
     availability_a = availability if availability_a is None else availability_a
     hidden_a = AVAILABILITY[availability_a] if availability_a else ()
     groups, sizes = group_ids(data["user_id"])
-    starts = np.concatenate([[0], np.cumsum(sizes)[:-1]])
+    starts = np.cumsum(sizes) - sizes
+    row_users = data["user_id"][starts]
     relevant = data["user_relevant_count"][starts].astype(np.int64)
-    users_path = Path(table_dir) / "users.parquet"
-    if users_path.exists():
-        viewers = pq.read_table(users_path, columns=["user_id", "history_bucket"]).to_pandas().set_index("user_id")
-        buckets = viewers.loc[data["user_id"][starts], "history_bucket"].to_numpy()
+    viewers = viewers_for(table_dir)
+    if viewers is not None:
+        buckets = viewers["history_bucket"].to_numpy()
     else:
         buckets = history_bucket(data["user_log_history_length"][starts])
     graded = None
@@ -129,6 +132,10 @@ def compare(table_dir, a_dirs, b_dirs, k=12, samples=2000, seed=0, output=None, 
             raise
     runs = {"a": per_viewer(a_dirs, masked(data, hidden_a), groups, relevant, k, graded),
             "b": per_viewer(b_dirs, masked(data, hidden), groups, relevant, k, graded)}
+    runs = {side: [{metric: expand(values, row_users, viewers) for metric, values in run.items()}
+                   for run in repeated] for side, repeated in runs.items()}
+    if not len(buckets):
+        raise ValueError("No eligible evaluation viewers")
     rng = np.random.default_rng(seed)
     report = {"table": str(table_dir), "table_rows_sha256": manifest["rows_sha256"], "k": k,
               "a": a_dirs, "b": b_dirs, "bootstrap_samples": samples,

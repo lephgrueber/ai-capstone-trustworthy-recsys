@@ -1,5 +1,13 @@
 # Data Card: model-ready retrieval inputs
 
+Integration update (2026-11-20): the counts below describe the original retrieval inputs.
+The adopted `workflow` prepares separate Train A, Final A, and Deployment A inputs with
+explicit fitting windows, optional rating/dislike histories, and configurable target sampling.
+The new schema and actual population are recorded in each run's metadata and manifests;
+do not use the historical counts below for those derived runs. Candidate-table `users.parquet`
+retains eligible viewers without candidates, and scoring now includes their zero outcomes.
+See [README](../README.md#integrated-m3-feedback-workflow) for current commands and resume checks.
+
 ## Dataset overview
 Derived from `data/processed/movielens_phase1` / ratio_80_10_10: 25,602,867 training ratings,
 12,760,312 positive ratings, 170,509 users and 50,986 candidate movies.

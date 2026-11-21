@@ -69,6 +69,8 @@ def holdout_mask(user_ids, fraction, seed):
 
 def group_sizes(user_ids):
     """Sizes of contiguous user blocks; rows must already be grouped by user."""
+    if not len(user_ids):
+        return np.zeros(0, dtype=int)
     change = np.flatnonzero(user_ids[1:] != user_ids[:-1]) + 1
     bounds = np.concatenate([[0], change, [len(user_ids)]])
     sizes = np.diff(bounds)
@@ -136,23 +138,29 @@ def round_grid(rounds, points=40):
     return [int(x) for x in grid]
 
 
-def select_rounds(booster, valid, features, k, grid):
+def select_rounds(booster, valid, features, k, grid, viewers=None):
     """End-to-end NDCG@k on every dev viewer for each round count in `grid` (one pass)."""
     groups, sizes = group_ids(valid["user_id"])
-    starts = np.concatenate([[0], np.cumsum(sizes)[:-1]])
+    from .population import expand
+    starts = np.cumsum(sizes) - sizes
+    row_users = valid["user_id"][starts]
+    population_size = len(viewers) if viewers is not None else len(sizes)
+    if not population_size:
+        raise ValueError("No eligible validation viewers")
     relevant = valid["user_relevant_count"][starts].astype(np.int64)
     labels = valid["label"].astype(float)
     matrix = np.column_stack([valid[name] for name in features])
     raw = np.zeros(len(labels))
     done, curve = 0, {}
     for target in grid:
-        raw += booster.predict(matrix, start_iteration=done, num_iteration=target - done,
-                               raw_score=True, num_threads=lightgbm_threads(4))
+        if len(labels):
+            raw += booster.predict(matrix, start_iteration=done, num_iteration=target - done,
+                                   raw_score=True, num_threads=lightgbm_threads(4))
         done = target
-        curve[target] = float(ndcg_by_group(groups, labels, raw, relevant, k).mean())
+        curve[target] = float(expand(ndcg_by_group(groups, labels, raw, relevant, k), row_users, viewers).mean())
     best = max(curve, key=lambda r: (curve[r], -r))
-    baseline = float(ndcg_by_group(groups, labels, -valid["retrieval_rank"].astype(float), relevant, k).mean())
-    return best, curve, baseline, len(sizes)
+    baseline = float(expand(ndcg_by_group(groups, labels, -valid["retrieval_rank"].astype(float), relevant, k), row_users, viewers).mean())
+    return best, curve, baseline, population_size
 
 
 def train(table_dir, output_dir, drop_features=(), holdout=0.1, seed=42, rounds=2000,
@@ -271,7 +279,9 @@ def _train_full(table, manifest, features, out, table_dir, valid_table_dir, roun
         # Dev requests carry only the values this app version could calculate.
         valid = mask_columns(valid, {name: 1.0 for name in valid_mask}, seed)
         grid = round_grid(rounds, grid_points)
-        best, curve, two_tower, viewers = select_rounds(booster, valid, features, display_k, grid)
+        from .population import viewers_for
+        best, curve, two_tower, viewers = select_rounds(
+            booster, valid, features, display_k, grid, viewers_for(valid_table_dir))
         selection = {"table": str(valid_table_dir), "table_rows_sha256": valid_manifest["rows_sha256"],
                      "metric": f"end-to-end NDCG@{display_k}, macro over every dev viewer "
                                "(denominator: all later likes, including retrieval misses)",

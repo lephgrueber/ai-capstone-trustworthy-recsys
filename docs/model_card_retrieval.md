@@ -1,5 +1,14 @@
 # Model Card — retrieval section
 
+Integration update (2026-11-20): the card below describes the earlier trained retrieval
+artifact. The adopted M3 implementation additionally supports favorite-ID pooling, dislikes,
+multiple interests, and optional metadata/tag inputs. These are configurable capabilities,
+not claims about the weights of the distributed model. The new workflow selects towers on
+dev Recall@500 and reranker rounds on end-to-end NDCG@12, includes empty-candidate viewers,
+and separates final test evaluation from deployment fitting. No new full-data quality or
+latency claim is established by this integration. A release requires matching regenerated
+artifacts and a separately published Weaviate index. See [report.txt](../report.txt).
+
 ## Overview and intended use
 
 This CPU two-tower movie retriever generates up to 100 unseen training-catalog candidates for offline recommendation research. It is a retrieval component, not a deployed recommendation policy or reranker.

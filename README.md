@@ -10,6 +10,43 @@ For the trained movie model, follow [learned serving](#learned-movie-serving) af
 the demo works. See the [architecture diagram](docs/application_architecture.md)
 for the application components and data flow.
 
+## Demo video and outline
+
+**90-second demo video:** `VIDEO_URL_PENDING`
+
+Recording/publication is pending. Replace this placeholder with a publicly viewable
+unlisted YouTube or Vimeo link, then check that it opens without signing in. This README
+serves as the project page; the placeholder is not evidence of a published video.
+
+### Screen-capture sequence (90 seconds)
+
+Record the application in **learned mode**, using a compatible saved two-tower model,
+Weaviate index, and LambdaRank reranker. Prepare the app and evidence tabs before recording;
+keep credentials and personal feedback logs off screen.
+
+| Time | What to show, in order | Narration outline |
+|---|---|---|
+| 0–10 s | Main page and active model information. | “This is our movie recommendation system. It helps viewers discover movies while making the system's behavior and limitations clear.” |
+| 10–28 s | In **Rate a movie**, search for a title, select it, save a rating of four or five stars, and show the refreshed recommendations. | “I can rate a movie I know. The system uses my saved preferences to find candidates with a two-tower model, searches their embeddings in Weaviate, and reranks the results.” |
+| 28–43 s | Switch to **Find recommendations** and submit “show comedy without horror.” Show the resulting list. | “I can also describe supported preferences in plain language. Genre constraints shape the results, and movies I have already rated are excluded.” |
+| 43–55 s | Use the main-page microphone, review the editable transcript, and submit it. If speech recognition is unavailable, demonstrate typed entry and identify the limitation. | “Voice input lets me enter the same request by speaking. I can review the text before submitting it, and typing remains available.” |
+| 55–68 s | Open a recommended movie's details, then refresh the page to show the saved rating remains. | “I can explore a recommendation and keep my ratings between visits in this browser. Saving a rating updates my profile; it does not retrain the model.” |
+| 68–83 s | Briefly show the saved-model ranking table and ANN comparison linked below. | “We evaluate the full recommendation flow. Reranking improved ordering in the reported benchmark. Approximate search closely matched exact results, but was slower at this catalog size.” |
+| 83–90 s | Return to the app, with the evaluation/documentation links visible in a prepared README tab if needed. | “The project combines usable recommendations with reproducible checks. Our separate off-policy evaluation work supports careful future experiments; it does not yet establish improved movie engagement.” |
+
+### Research findings and storyline
+
+These are the figures and tables to feature in the recording or accompanying presentation.
+Use their stated populations and measurement conditions; the saved-model benchmarks are
+not results for a newly trained M3-feedback model.
+
+| Evidence to show | Finding it supports | Place in the story |
+|---|---|---|
+| [Application architecture diagram](docs/application_architecture.md) | Connects browser input, the API, retrieval, Weaviate, and reranking. | Explain how a preference becomes a recommendation. |
+| [Retrieval quality table](docs/retrieval_report.md) and [reranking test table](docs/ranking_report.md#test-results-4310-warm-users) | Compare methods within the same population. For the 4,310 warm test users, reranking raised NDCG@10 from 0.1057 to 0.1204. | Show measured ranking quality, while keeping fallback and cold-start limitations visible. |
+| [ANN overlap and latency table](docs/ann_benchmark.md) | Top-500 overlap with exact results was 99.9618%; Weaviate was slower than exact search in this local benchmark. | Show the measured accuracy/latency trade-off rather than promise a speedup. |
+| [Open Bandit estimates and uncertainty](docs/ope_report.md) | Validation selected the uniform policy; contextual estimates have limited effective sample sizes and wide intervals. | Close with what the evidence does—and does not—support. These fashion-click results are separate from movie-app outcomes. |
+
 ## Project and current status
 
 The repository now contains a two-tower retrieval implementation with Weaviate-backed nearest-neighbor search and a user-facing application. FastAPI supports credential-free fixtures, a local MovieLens genre baseline, or a verified published two-tower model. Each application path uses hard filtering, reranking, and final output validation. Learned mode can optionally apply a LightGBM LambdaRank reranker over the top 500 two-tower candidates (see [docs/ranking_report.md](docs/ranking_report.md)); otherwise a pass-through reranker keeps retrieval order. A separate Open Bandit experiment implements direct method (DM), inverse propensity scoring (IPS), self-normalized IPS (SNIPS), and doubly robust (DR) estimation of position-specific click reward.
@@ -820,6 +857,43 @@ Each run writes a timestamped JSON file containing run metadata, aggregate Recal
 [`data/golden_set_50.jsonl`](data/golden_set_50.jsonl) contains 50 curated synthetic recommendation cases: 15 `golden_path`, 20 `representative`, and 15 `hard_edge`. It is intended for qualitative and regression review and remains separate from quantitative MovieLens validation evaluation. Its `reference_items` are illustrative reviewer guidance, not quantitative relevance labels, and must not be used to calculate Recall@K or NDCG@K.
 
 ## Tests and reproducibility
+
+### Integrated M3 feedback workflow
+
+The adopted implementation is `trustworthy_recsys.workflow`, with temporal exports in
+`data.windows`. It fits towers on Train A and the reranker on Train B, selects on dev,
+then supports separate final and deployment refits. The default 7:1 A:B ratio subdivides
+the existing training period; dev/test boundaries stay fixed. Earlier `data.staged`
+commands from the parallel local implementation are superseded.
+
+From the repository root, with the virtual environment activated (PowerShell or Bash):
+
+```text
+python -m trustworthy_recsys.workflow development --run-dir data/processed/movielens_phase1 --root artifacts/m3_integrated
+python -m trustworthy_recsys.workflow final --run-dir data/processed/movielens_phase1 --root artifacts/m3_integrated
+python -m trustworthy_recsys.workflow deployment --run-dir data/processed/movielens_phase1 --root artifacts/m3_integrated
+```
+
+Run the latter stages only after completing development and reviewing the selected settings.
+Use `--settings path/to/settings.json` for development overrides. Different configurations
+require different roots. `request.json` records settings, source manifests, external metadata,
+and code hashes; resume rejects incompatible requests and verifies completed artifact files.
+Older outputs without this fingerprint require a new root. Interrupted workflow-owned window
+directories are preserved with an `.incomplete-...` suffix before reconstruction.
+
+Favorite identities, dislikes, metadata, and semantic tags are optional configurations, not
+automatically enabled by these commands. Real semantic-tag encoding requires
+`python -m pip install -e ".[tags]"` and access to the configured encoder weights.
+Custom encoders used by tests do not require that optional package.
+
+The workflow exports embeddings and uses exact search for offline candidates. Publish a
+matching index separately with `python -m trustworthy_recsys.retrieval.publish --help`;
+changing source code does not replace the served model or Weaviate collection. Keep models,
+mappings, embeddings, reranker, and manifests from the same run together.
+
+Evaluation, paired comparisons, and dev round selection include eligible viewers who receive
+zero candidates. See [the integration review](docs/m3_merge_review.md) and
+[the submission report](report.txt) for validation evidence and remaining experiment work.
 
 The tests cover pipeline boundaries and data contracts, output consistency across batch sizes, golden-set structure, ranking metrics, and harness input/reporting behavior. GitHub Actions installs the package and runs the test suite on Python 3.12.
 

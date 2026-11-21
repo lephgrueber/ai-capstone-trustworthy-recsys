@@ -1,5 +1,13 @@
 # Data Card: movielens-32m
 
+Integration update (2026-11-20): the dataset statistics below describe the existing source
+run. The adopted M3 `data.windows` workflow subdivides its training partition into Train A
+and Train B using a global timestamp cutoff (default A:B 7:1), preserving dev/test boundaries
+and timestamp ties. Window sidecars and manifests contain the actual derived counts and
+hashes. New fitted-model populations must be reported from their own artifacts; source-run
+statistics are not evidence that a new model has been trained. Dataset licensing and source
+limitations below continue to apply. See [README](../README.md#integrated-m3-feedback-workflow).
+
 ## Dataset overview
 
 This dataset supports research on movie recommendation, retrieval, and ranking. The tables below describe this pipeline run; they are generated from the files rather than copied from an expected split ratio.

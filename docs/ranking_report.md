@@ -1,5 +1,11 @@
 # Reranking evaluation report
 
+Integration update (2026-11-20): results below are historical. Current M3 commands use
+`workflow.py`, Train B fitting and independent dev selection. Scoring now retains viewers
+with zero candidates in macro means and paired comparisons. The integrated workflow has
+not yet produced a replacement full-data benchmark; do not relabel these historical scores
+as results for the new architecture. See [report.txt](../report.txt) for verified status.
+
 LightGBM LambdaRank reranks the top 500 two-tower candidates for each user. This report compares it with **pass-through** (the two-tower order, which the application currently serves) on the same users and candidates. Metrics are macro user means using the repository definitions: the Recall@K and binary NDCG@K denominators count every relevant held-out movie, including ones retrieval missed.
 
 ## Protocol

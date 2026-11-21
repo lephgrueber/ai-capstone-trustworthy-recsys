@@ -6,10 +6,12 @@ on:
   push:
     paths:
       - "frontend/**"
+      - "trustworthy_recsys/serving/**"
       - ".github/workflows/frontend.yml"
   pull_request:
     paths:
       - "frontend/**"
+      - "trustworthy_recsys/serving/**"
       - ".github/workflows/frontend.yml"
   workflow_dispatch:
 

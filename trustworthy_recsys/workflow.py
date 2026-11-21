@@ -23,6 +23,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import uuid
 
 from trustworthy_recsys.data.reporting import code_provenance, hashes, write_json
 
@@ -71,6 +72,40 @@ def merged(base, override):
     return out
 
 
+def verified_manifest(folder):
+    """Validate files before a completed artifact is reused."""
+    folder = Path(folder).resolve()
+    manifest = json.loads((folder / "manifest.json").read_text())
+    outputs = manifest.get("outputs", {})
+    if "rows_sha256" in manifest:
+        outputs = {"rows.parquet": manifest["rows_sha256"], **outputs}
+        if "users_sha256" in manifest:
+            outputs["users.parquet"] = manifest["users_sha256"]
+    if "output_sha256" in manifest:
+        outputs = {"movie_metadata.parquet": manifest["output_sha256"], **outputs}
+    if not outputs:
+        raise ValueError(f"No verifiable outputs in {folder}")
+    for name, digest in outputs.items():
+        path = (folder / name).resolve()
+        expected = digest if isinstance(digest, str) else digest["sha256"]
+        if not path.is_relative_to(folder) or not path.is_file() or hashes(path)["sha256"] != expected:
+            raise ValueError(f"Artifact hash mismatch: {folder / name}")
+    return hashes(folder / "manifest.json")["sha256"]
+
+
+def guard_request(out, request):
+    """Refuse silent reuse after data, configuration, or code changes."""
+    path = out / "request.json"
+    if path.exists():
+        if json.loads(path.read_text()) != request:
+            raise ValueError("Workflow request changed; choose a new root for different settings, sources, or code")
+    elif out.exists() and any(out.iterdir()):
+        raise ValueError("Existing workflow has no request fingerprint; choose a new root")
+    else:
+        out.mkdir(parents=True, exist_ok=True)
+        write_json(path, request)
+
+
 def run_stage(stage, run_dir, root, settings=None, scenario="ratio_80_10_10", windows_dir=None):
     """Run one stage; returns its summary. ``final``/``deployment`` require ``locked.json``."""
     from trustworthy_recsys.data.retrieval_inputs import prepare_inputs
@@ -89,18 +124,51 @@ def run_stage(stage, run_dir, root, settings=None, scenario="ratio_80_10_10", wi
             raise ValueError("Final and deployment fits use the locked settings; do not pass overrides")
         settings = json.loads(locked_path.read_text())
     windows_dir = Path(windows_dir) if windows_dir else root / f"windows_ab{settings['ab_ratio']:g}"
+    out = root / stage
+    source_hash = verified_manifest(run_dir)
+    external = {}
+    for config in (settings["tower"].get("movie_side", {}), settings["reranker"]):
+        for key in ("metadata_dir", "tags_dir"):
+            if config.get(key):
+                folder = Path(config[key]).resolve()
+                external[str(folder)] = verified_manifest(folder)
+    package_root = Path(__file__).parent
+    code_hashes = {p.relative_to(package_root).as_posix(): hashes(p)["sha256"]
+                   for p in sorted(package_root.rglob("*.py"))}
+    request = {"stage": stage, "run_dir": str(Path(run_dir).resolve()), "scenario": scenario,
+               "settings": settings, "source_manifest": source_hash, "external": external,
+               "windows_dir": str(windows_dir.resolve()), "code": code_hashes}
+    # JSON round-trip normalizes Path objects supplied by Python callers.
+    guard_request(out, json.loads(json.dumps(request, default=str)))
     if not complete(windows_dir):
         from trustworthy_recsys.data.windows import prepare
+        if windows_dir.exists():
+            if windows_dir.resolve().parent != root.resolve() or windows_dir.is_symlink():
+                raise ValueError("Incomplete external windows directory; choose a new --windows-dir")
+            # Preserve partial output for inspection instead of deleting it.
+            windows_dir.rename(windows_dir.with_name(windows_dir.name + ".incomplete-" + uuid.uuid4().hex))
         prepare(run_dir, scenario, windows_dir, settings["ab_ratio"])
     windows = json.loads((windows_dir / "windows.json").read_text())
     if windows["ab_ratio"] != settings["ab_ratio"]:
         raise ValueError("Window directory uses a different A:B ratio")
+    if windows["scenario"] != scenario or Path(windows["run_dir"]).resolve() != Path(run_dir).resolve():
+        raise ValueError("Window directory uses a different source run or scenario")
+    for name, digest in windows["source_hashes"].items():
+        if hashes(Path(run_dir) / name)["sha256"] != digest:
+            raise ValueError("Window source hash mismatch")
+    for name, export in windows["exports"].items():
+        sidecar = json.loads((windows_dir / f"{name}.json").read_text())
+        if sidecar != export or hashes(windows_dir / f"{name}.jsonl")["sha256"] != export["sha256"]:
+            raise ValueError("Window export hash or sidecar mismatch")
 
     partitions, a_window, b_name, eval_name = STAGES[stage]
     tower, rerank = settings["tower"], settings["reranker"]
     out = root / stage
     out.mkdir(exist_ok=True)
     inputs, towers = out / "inputs_a", out / "towers"
+    for folder in (inputs, towers, out / "reranker", *out.glob("table_*")):
+        if complete(folder):
+            verified_manifest(folder)
     if not complete(inputs):
         shutil.rmtree(inputs, ignore_errors=True)
         prepare_inputs(run_dir, scenario, inputs, tower["max_targets_per_user"], partitions,

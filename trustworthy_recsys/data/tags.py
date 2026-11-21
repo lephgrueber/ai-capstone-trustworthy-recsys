@@ -70,7 +70,8 @@ def build(run_dir, output_dir, encoder_name=DEFAULT_ENCODER, encoder=None) -> di
     phrases = np.array(sorted(pairs["phrase"].unique()))
     phrase_id = {p: i for i, p in enumerate(phrases)}
     pairs["phrase_id"] = pairs["phrase"].map(phrase_id).astype("int32")
-    encoder = encoder or load_encoder(encoder_name)
+    custom_encoder = encoder is not None
+    encoder = encoder if custom_encoder else load_encoder(encoder_name)
     vectors = encode(encoder, phrases)
     # Fixed linear projection for tower inputs: PCA of all phrase vectors, computed once.
     centered = vectors - vectors.mean(axis=0)
@@ -83,7 +84,7 @@ def build(run_dir, output_dir, encoder_name=DEFAULT_ENCODER, encoder=None) -> di
     pd.DataFrame({"phrase": phrases}).to_parquet(out / "phrases.parquet", index=False)
     pairs[["movie_id", "phrase_id", "ts"]].rename(columns={"ts": "first_used"}).to_parquet(
         out / "movie_phrases.parquet", index=False)
-    version = getattr(__import__("sentence_transformers"), "__version__", "unknown") if encoder_name else "custom"
+    version = "custom" if custom_encoder else getattr(__import__("sentence_transformers"), "__version__", "unknown")
     manifest = {
         "encoder": encoder_name, "encoder_library_version": version, "vector_dim": int(vectors.shape[1]),
         "normalization": "phrase trimmed, lower-cased, whitespace collapsed; vectors unit-normalized",
