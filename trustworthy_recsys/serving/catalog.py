@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from functools import cached_property
 
 import pandas as pd
@@ -13,6 +14,8 @@ from trustworthy_recsys.serving.contracts import CatalogMovie, PreferenceState
 @dataclass(frozen=True)
 class Catalog:
     movies: dict[str, CatalogMovie]
+    # Optional like counts used only to order equally good title matches.
+    popularity: Mapping[str, float] | None = field(default=None, compare=False)
 
     # Cached: the catalog is immutable, and these are read per candidate on every request.
     @cached_property
@@ -23,18 +26,14 @@ class Catalog:
     def genres(self) -> frozenset[str]:
         return frozenset(genre for movie in self.movies.values() for genre in movie.genres)
 
+    @cached_property
+    def title_index(self):
+        from trustworthy_recsys.serving.title_search import TitleIndex
+        return TitleIndex({movie_id: movie.title for movie_id, movie in self.movies.items()}, self.popularity)
+
     def search(self, query: str, limit: int) -> list[CatalogMovie]:
-        needle = query.casefold().strip()
-        values = self.movies.values()
-        matches = [movie for movie in values if not needle or needle in movie.title.casefold()]
-
-        def order(movie: CatalogMovie):
-            title = movie.title.casefold()
-            title_without_year = title.rsplit(" (", 1)[0] if title.endswith(")") else title
-            relevance = 0 if title_without_year == needle else 1 if title_without_year.startswith(needle) else 2
-            return relevance, title, movie.movie_id
-
-        return sorted(matches, key=order)[:limit]
+        """Article-, partial- and typo-tolerant title search (see title_search.py)."""
+        return [self.movies[movie_id] for movie_id in self.title_index.search(query, limit)]
 
     def allows(self, movie_id: str, preferences: PreferenceState) -> bool:
         movie = self.movies.get(movie_id)

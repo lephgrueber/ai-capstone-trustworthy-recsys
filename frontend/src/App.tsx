@@ -6,7 +6,7 @@ import { Button } from "./components/ui/button";
 import { MovieDialog } from "./components/ui/dialog";
 import { VoiceInput } from "./components/VoiceInput";
 import { FeedbackCollector } from "./feedback";
-import { loadBrowserProfile, removeRating, saveBrowserProfile, setRating, type BrowserProfile } from "./profile";
+import { loadBrowserProfile, MAX_TAGS, parseTags, removeRating, saveBrowserProfile, setRating, type BrowserProfile } from "./profile";
 
 const EMPTY: PreferenceState = { history_items: [], excluded_movie_ids: [], include_genres: [], exclude_genres: [], ratings: [] };
 const TMDB_LOGO = `${import.meta.env.BASE_URL}tmdb-logo.svg`;
@@ -30,8 +30,7 @@ function samePreferences(left: PreferenceState, right: PreferenceState) {
     include_genres: value.include_genres,
     exclude_genres: value.exclude_genres,
     ratings: value.ratings === null || value.ratings === undefined ? value.ratings : value.ratings.map((record) => ({
-      movie_id: record.movie_id,
-      rating: record.rating,
+      ...toRatingRecord(record),
       rated_at: new Date(record.rated_at).toISOString(),
     })),
   });
@@ -123,11 +122,25 @@ function MovieCarousel({ ariaLabel, items, artwork, favoriteIds, reducedMotion, 
   })}</div><button className="edge-arrow next" aria-label={`Next ${ariaLabel}`} disabled={!edges.next} onClick={() => scroll(1)}><ChevronRight /></button></div></div>;
 }
 
+type RatingRecordLike = { movie_id: string; rating: number; rated_at: string; tags?: string[] | null; tagged_at?: string | null };
+
+// The request carries tags only when present, so untagged profiles keep the original shape.
+export function toRatingRecord({ movie_id, rating, rated_at, tags, tagged_at }: RatingRecordLike) {
+  return tags?.length && tagged_at ? { movie_id, rating, rated_at, tags, tagged_at } : { movie_id, rating, rated_at };
+}
+
+export function filterGenres(genres: string[], filter: string): string[] {
+  const needle = filter.trim().toLocaleLowerCase();
+  return needle ? genres.filter((genre) => genre.toLocaleLowerCase().includes(needle)) : genres;
+}
+
 function GenreChoices({ kind, genres, selected, blocked, onToggle }: { kind: "include" | "avoid"; genres: string[]; selected: string[]; blocked: string[]; onToggle: (genre: string, kind: "include" | "avoid") => void }) {
-  return <div className="genre-dialog-options">{genres.map((genre) => {
+  const [filter, setFilter] = useState("");
+  const visible = filterGenres(genres, filter);
+  return <><input className="genre-filter" type="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Type to narrow genres" aria-label={`Filter ${kind === "include" ? "include" : "avoid"} genres`} autoFocus /><div className="genre-dialog-options">{visible.map((genre) => {
     const active = selected.includes(genre); const disabled = blocked.includes(genre);
     return <button type="button" key={genre} aria-pressed={active} disabled={disabled} title={disabled ? `Remove ${genre} from ${kind === "include" ? "Avoid" : "Include"} first` : undefined} onClick={() => onToggle(genre, kind)} className={`genre-option ${kind} ${active ? "active" : ""}`}><span className="genre-check" aria-hidden="true">{active ? (kind === "include" ? <Check size={14} /> : <Ban size={14} />) : null}</span>{genre}</button>;
-  })}</div>;
+  })}{!visible.length && <p className="genre-filter-empty">No genres match “{filter}”.</p>}</div></>;
 }
 
 export function App() {
@@ -136,7 +149,7 @@ export function App() {
   const initialPreferences = useMemo<PreferenceState>(() => ({
     ...EMPTY,
     history_items: [...loaded.profile.legacy_favorites],
-    ratings: loaded.profile.ratings.map(({ movie_id, rating, rated_at }) => ({ movie_id, rating, rated_at })),
+    ratings: loaded.profile.ratings.map(toRatingRecord),
   }), [loaded.profile]);
   const [profile, setProfile] = useState<BrowserProfile>(loaded.profile);
   const [profilePersistent, setProfilePersistent] = useState(loaded.persistent);
@@ -155,6 +168,7 @@ export function App() {
   const [detail, setDetail] = useState<CatalogMovie | null>(null);
   const [ratingMovie, setRatingMovie] = useState<CatalogMovie | null>(null);
   const [ratingDraft, setRatingDraft] = useState(4);
+  const [tagDraft, setTagDraft] = useState("");
   const [ratingSaveError, setRatingSaveError] = useState<string | null>(null);
   const [ratingNoticeActive, setRatingNoticeActive] = useState(false);
   const [ratingNoticeRefresh, setRatingNoticeRefresh] = useState(false);
@@ -277,7 +291,7 @@ export function App() {
   };
   const profileForPreferences = (state: PreferenceState): BrowserProfile => ({
     ...profile,
-    ratings: (state.ratings ?? []).map(({ movie_id, rating, rated_at }) => ({ movie_id, rating, rated_at })),
+    ratings: (state.ratings ?? []).map(toRatingRecord),
     legacy_favorites: [...state.history_items],
   });
   const applyProfile = (next: BrowserProfile) => {
@@ -286,7 +300,7 @@ export function App() {
     changePreferences({
       ...state,
       history_items: [...next.legacy_favorites],
-      ratings: next.ratings.map(({ movie_id, rating, rated_at }) => ({ movie_id, rating, rated_at })),
+      ratings: next.ratings.map(toRatingRecord),
     });
     return true;
   };
@@ -311,7 +325,7 @@ export function App() {
     ratingFallbackFocus.current = searchInput.current;
     searchDismissed.current = true;
     setKnownMovies((current) => ({ ...current, [movie.movie_id]: movie }));
-    setDetail(null); setRatingsOpen(false); setSearchOpen(false); setRatingMovie(movie); setRatingDraft(existing?.rating ?? 4); setRatingSaveError(null);
+    setDetail(null); setRatingsOpen(false); setSearchOpen(false); setRatingMovie(movie); setRatingDraft(existing?.rating ?? 4); setTagDraft((existing?.tags ?? []).join(", ")); setRatingSaveError(null);
   };
   const closeRating = () => {
     setRatingMovie(null);
@@ -322,7 +336,7 @@ export function App() {
   };
   const saveRating = () => {
     if (!ratingMovie) return;
-    const updated = setRating(profile, ratingMovie, ratingDraft);
+    const updated = setRating(profile, ratingMovie, ratingDraft, new Date(), parseTags(tagDraft));
     if (updated.changed && !applyProfile(updated.profile)) {
       setRatingSaveError("We couldn’t save this rating in your browser. Your selection is still here; try again.");
       return;
@@ -455,7 +469,7 @@ export function App() {
     </div></MovieDialog>
 
     <MovieDialog open={genreDialog !== null} onOpenChange={(open) => !open && setGenreDialog(null)} title={genreDialog === "include" ? "Include genres" : "Avoid genres"} description={genreDialog === "include" ? "Recommendations will match at least one selected genre." : "Recommendations will match none of the selected genres."} closeLabel="Close genre selector">{genreDialog && <div className="genre-dialog-content"><GenreChoices kind={genreDialog} genres={genres} selected={genreDialog === "include" ? preferences.include_genres : preferences.exclude_genres} blocked={genreDialog === "include" ? preferences.exclude_genres : preferences.include_genres} onToggle={toggleGenre} /><Button onClick={() => setGenreDialog(null)}>Done</Button></div>}</MovieDialog>
-    <MovieDialog open={ratingMovie !== null} onOpenChange={(open) => !open && closeRating()} title={ratingMovie ? `Rate ${formatCatalogTitle(ratingMovie.title).title}` : "Rate movie"} description="Choose your rating." closeLabel="Close rating" presentation="modal" contentClassName="rating-panel"><div className="rating-editor">{ratingMovie && <><span className="rating-editor-poster"><Portrait movie={ratingMovie} artwork={artwork[ratingMovie.movie_id]} compact /></span><div className="rating-control"><label htmlFor="your-rating">Your rating</label><select id="your-rating" value={ratingDraft} onChange={(event) => { setRatingDraft(Number(event.target.value)); setRatingSaveError(null); }}>{Array.from({ length: 10 }, (_, index) => (index + 1) / 2).map((value) => <option value={value} key={value}>{value.toFixed(1)} stars</option>)}</select><Button className="rating-save" onClick={saveRating}><Star /> Save rating</Button></div>{ratingSaveError && <p className="rating-save-error" role="alert">{ratingSaveError}</p>}</>}</div></MovieDialog>
+    <MovieDialog open={ratingMovie !== null} onOpenChange={(open) => !open && closeRating()} title={ratingMovie ? `Rate ${formatCatalogTitle(ratingMovie.title).title}` : "Rate movie"} description="Choose your rating." closeLabel="Close rating" presentation="modal" contentClassName="rating-panel"><div className="rating-editor">{ratingMovie && <><span className="rating-editor-poster"><Portrait movie={ratingMovie} artwork={artwork[ratingMovie.movie_id]} compact /></span><div className="rating-control"><label htmlFor="your-rating">Your rating</label><select id="your-rating" value={ratingDraft} onChange={(event) => { setRatingDraft(Number(event.target.value)); setRatingSaveError(null); }}>{Array.from({ length: 10 }, (_, index) => (index + 1) / 2).map((value) => <option value={value} key={value}>{value.toFixed(1)} stars</option>)}</select><label htmlFor="your-tags">Tags (optional)</label><input id="your-tags" className="rating-tags" value={tagDraft} maxLength={220} placeholder="e.g. space travel, slow burn" onChange={(event) => { setTagDraft(event.target.value); setRatingSaveError(null); }} /><small className="rating-tags-help">Up to {MAX_TAGS} comma-separated phrases describing the movie.</small><Button className="rating-save" onClick={saveRating}><Star /> Save rating</Button></div>{ratingSaveError && <p className="rating-save-error" role="alert">{ratingSaveError}</p>}</>}</div></MovieDialog>
     <MovieDialog open={detail !== null} onOpenChange={(open) => !open && setDetail(null)} title={formattedDetail?.title ?? "Movie details"} description="Movie details and artwork information. Opening details does not save feedback." contentClassName="detail-panel">{detail && <div className="detail-content"><div className="detail-poster"><Portrait movie={detail} artwork={artwork[detail.movie_id]} /></div><dl>{formattedDetail?.year && <><dt>Year</dt><dd>{formattedDetail.year}</dd></>}<dt>Genres</dt><dd>{detail.genres.join(", ") || "Unavailable"}</dd><dt>Artwork</dt><dd>{artwork[detail.movie_id]?.poster || artwork[detail.movie_id]?.backdrop ? "Provided by TMDB" : "Not available"}</dd></dl><Button onClick={() => openRating(detail)}><Star /> Rate this movie</Button></div>}</MovieDialog>
     <MovieDialog open={aboutOpen} onOpenChange={setAboutOpen} title="About" accessibleName="About Trustworthy Recommendation System" description="Trustworthy Recommendation System is a research prototype for transparent, preference-driven movie discovery."><div className="about-content"><section className="how-it-works"><h3>How it works</h3><p>{status?.backend_mode === "fixture" ? "The active demo backend ranks a small synthetic fixture catalog." : "The active recommendation backend ranks movies from MovieLens data."} Explicit ratings are stored locally in this browser and sent with recommendation requests. Rated movies are excluded from results; ratings of 4 or more also provide positive history. TMDB supplies display artwork only.</p>{status?.backend_mode === "baseline" && <p className="capability-note">The active baseline uses genre-weighted popularity. Learned retrieval and reranking are not active.</p>}{status?.backend_mode === "fixture" && <p className="capability-note">Synthetic fixture results demonstrate the interface only.</p>}{status?.backend_mode === "learned" && <p className="capability-note">The configured two-tower retrieval and LambdaRank reranker are active.</p>}</section><p className="documentation-links"><a href="https://github.com/lephgrueber/ai-capstone-trustworthy-recsys" target="_blank" rel="noreferrer">Project repository</a></p><details className="system-details"><summary>System details</summary><section><p className="data-flow-note">The browser restores the versioned rating profile before its first recommendation request. Numeric ratings and their genuine submission times remain separate from the optional featured-slot research event stream. No account or cross-device synchronization is provided.</p><dl><dt>Model</dt><dd>{status?.model_label ?? "Unknown"}</dd><dt>Data</dt><dd>{status?.data_source_label ?? "Unknown"}</dd><dt>Backend mode</dt><dd>{status?.backend_mode ?? "Unknown"}</dd><dt>Genre refinement</dt><dd>{status?.refinement_available ? "Available" : "Unavailable"}</dd><dt>Artwork</dt><dd>{status?.posters_configured ? "TMDB configured" : "TMDB not configured"}</dd>{result && <><dt>Retrieval</dt><dd>{result.retrieval.name} · {result.retrieval.version}</dd><dt>Reranking</dt><dd>{result.reranker.name} · {result.reranker.version}</dd><dt>Timing</dt><dd>{result.timings.total_ms.toFixed(2)} ms server · {browserMs?.toFixed(2)} ms browser</dd><dt>Request</dt><dd>{result.request_id.slice(0, 8)} · revision {result.preference_revision}</dd>{result.warnings.length > 0 && <><dt>Warnings</dt><dd>{result.warnings.join(" ")}</dd></>}</>}</dl></section></details><section className="tmdb-credit"><a href="https://www.themoviedb.org" target="_blank" rel="noreferrer">{!tmdbLogoFailed ? <img src={TMDB_LOGO} alt="The Movie Database (TMDB)" onError={() => setTmdbLogoFailed(true)} /> : <span className="tmdb-text-fallback">The Movie Database (TMDB)</span>}</a><p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p></section><p className="course-note">University of Pennsylvania · CIS 5980 AI Engineering Capstone</p></div></MovieDialog>
   </main>;

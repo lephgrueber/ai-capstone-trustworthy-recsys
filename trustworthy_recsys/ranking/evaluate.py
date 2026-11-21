@@ -1,9 +1,14 @@
-"""Compare the LambdaRank reranker with pass-through (two-tower order) on a candidate table.
+"""Compare popularity, pass-through (two-tower order) and LambdaRank on a candidate table.
 
 Metrics follow trustworthy_recsys.evaluation.metrics: macro user means of Recall@K and
 binary NDCG@K, where the denominators count *all* of a user's relevant items, including
 those retrieval missed. Run on the reranker's own validation table, only its early-stopping
-holdout users are scored; run on a test table, every user is scored.
+holdout users are scored; run on any other table (dev, test), every viewer is scored,
+including viewers with no hit among the candidates. K=12 is the browser display length.
+
+Tables built from window exports carry users.parquet, which adds the popularity baseline
+(ranked by likes before the feature cutoff, rated movies excluded) and the usable-favorite
+groups 0, 1-20, 21-100 and 101+.
 """
 
 import argparse
@@ -12,12 +17,13 @@ from pathlib import Path
 
 import lightgbm as lgb
 import numpy as np
+import pandas as pd
 import pyarrow.parquet as pq
 
 from trustworthy_recsys.data.reporting import code_provenance, hashes, write_json
 from .train import group_sizes, holdout_mask, lightgbm_threads
 
-KS = (10, 20, 50)
+KS = (10, 12, 20, 50)
 
 
 def user_metrics(labels, order_scores, sizes, relevant_counts, ks=KS):
@@ -53,9 +59,26 @@ def paired_bootstrap(new, old, samples=1000, seed=0):
             "users_improved": int((diff > 0).sum()), "users_worse": int((diff < 0).sum())}
 
 
+HISTORY_GROUPS = ("history_0", "history_1_20", "history_21_100", "history_101_plus")
+
+
 def history_bucket(log_length):
     length = np.rint(np.expm1(log_length))
-    return np.where(length <= 20, "history_1_20", np.where(length <= 100, "history_21_100", "history_101_plus"))
+    return np.where(length == 0, "history_0", np.where(length <= 20, "history_1_20",
+                    np.where(length <= 100, "history_21_100", "history_101_plus")))
+
+
+def popularity_metrics(users, ks=KS):
+    """Per-viewer metrics of the popularity list stored in users.parquet (top 50)."""
+    depth = max(ks)
+    labels = np.zeros((len(users), depth))
+    for row, values in enumerate(users["popularity_labels"]):
+        values = np.asarray(values[:depth], dtype=float)
+        labels[row, :len(values)] = values
+    flat = labels.ravel()
+    scores = np.tile(-np.arange(depth, dtype=float), len(users))
+    sizes = np.full(len(users), depth)
+    return user_metrics(flat, scores, sizes, users["relevant_count"].to_numpy(), ks)
 
 
 def evaluate(table_dir, model_dir, output, ks=KS, bootstrap=1000):
@@ -70,7 +93,15 @@ def evaluate(table_dir, model_dir, output, ks=KS, bootstrap=1000):
     manifest = json.loads((table_dir / "manifest.json").read_text())
     if hashes(table_dir / "rows.parquet")["sha256"] != manifest["rows_sha256"]:
         raise ValueError("Reranker table hash mismatch")
-    if manifest["feature_cutoff_utc"] != training["feature_cutoff_utc"]:
+    if "feature_partitions" in training:
+        # Proposed workflow: each table's features end where its own inputs end (Train B
+        # tables at Train A's end, dev at dev start, test at test start), from the same towers.
+        fit_manifest = json.loads((Path(training["table"]) / "manifest.json").read_text())
+        if manifest.get("model_manifest_sha256") != fit_manifest.get("model_manifest_sha256"):
+            raise ValueError("Table candidates come from different towers than the reranker's fitting table")
+        if pd.Timestamp(manifest["feature_cutoff_utc"]) < pd.Timestamp(training["feature_cutoff_utc"]):
+            raise ValueError("Evaluation features end before the reranker's fitting features")
+    elif manifest["feature_cutoff_utc"] != training["feature_cutoff_utc"]:
         raise ValueError("Table and model use different feature cutoffs")
     features = training["features"]
     columns = ["user_id", "label", "fallback", "user_relevant_count", "retrieval_rank", "user_log_history_length", *features]
@@ -85,6 +116,12 @@ def evaluate(table_dir, model_dir, output, ks=KS, bootstrap=1000):
 
     sizes = group_sizes(data["user_id"])
     starts = np.concatenate([[0], np.cumsum(sizes)[:-1]])
+    viewers = None
+    if (table_dir / "users.parquet").exists() and not same_table:
+        if hashes(table_dir / "users.parquet")["sha256"] != manifest.get("users_sha256"):
+            raise ValueError("Reranker users table hash mismatch")
+        viewers = pq.read_table(table_dir / "users.parquet").to_pandas().set_index("user_id")
+        viewers = viewers.loc[data["user_id"][starts]]
     threads = lightgbm_threads(4)
     booster = lgb.Booster(model_file=str(model_dir / "model.txt"))
     scores = booster.predict(np.column_stack([data[name] for name in features]), num_threads=threads)
@@ -94,17 +131,39 @@ def evaluate(table_dir, model_dir, output, ks=KS, bootstrap=1000):
         "pass_through": user_metrics(labels, -data["retrieval_rank"], sizes, relevant, ks),
         "lambdarank": user_metrics(labels, scores, sizes, relevant, ks),
     }
+    if viewers is not None and "popularity_labels" in viewers:
+        methods = {"popularity": popularity_metrics(viewers, ks), **methods}
+    graded_k = 12
+    try:
+        from .labels import graded_ndcg, table_ratings
+        movie_ids = pq.read_table(table_dir / "rows.parquet", columns=["movie_id"])["movie_id"].to_numpy(zero_copy_only=False)
+        if same_table:
+            movie_ids = movie_ids[mask]
+        row_ratings, ideal = table_ratings(table_dir, data["user_id"], movie_ids)
+        groups = np.repeat(np.arange(len(sizes)), sizes)
+        ideals = [ideal.get(u, np.zeros(0)) for u in data["user_id"][starts]]
+        from .labels import graded_gain
+        gains = graded_gain(row_ratings) * (row_ratings >= 4.0)
+        for method, order in (("pass_through", -data["retrieval_rank"].astype(float)), ("lambdarank", scores)):
+            methods[method][f"graded_ndcg_at_{graded_k}"] = graded_ndcg(groups, gains, order, ideals, graded_k)
+    except ValueError as error:
+        if "window export" not in str(error):
+            raise
+        # Legacy tables (no window export with star ratings): binary metrics only.
+    buckets = (viewers["history_bucket"].to_numpy() if viewers is not None
+               else history_bucket(data["user_log_history_length"][starts]))
     slices = {"all": np.ones(len(sizes), dtype=bool),
               "fallback": data["fallback"][starts],
-              **{name: history_bucket(data["user_log_history_length"][starts]) == name
-                 for name in ("history_1_20", "history_21_100", "history_101_plus")}}
-    metrics = {f"{method}/{name}": {"users": int(mask.sum()),
-                                    **{metric: float(values[mask].mean()) for metric, values in per_user.items()}}
-               for method, per_user in methods.items() for name, mask in slices.items() if mask.any()}
+              **{name: buckets == name for name in HISTORY_GROUPS}}
+    metrics = {f"{method}/{name}": {"users": int(selected.sum()),
+                                    **{metric: float(values[selected].mean()) for metric, values in per_user.items()}}
+               for method, per_user in methods.items() for name, selected in slices.items() if selected.any()}
+    shared = [m for m in methods["lambdarank"] if m in methods["pass_through"]]
     comparison = {metric: paired_bootstrap(methods["lambdarank"][metric], methods["pass_through"][metric], bootstrap)
-                  for metric in methods["lambdarank"]}
+                  for metric in shared}
     report = {
         "population": population, "users": int(len(sizes)), "rows": int(len(labels)),
+        "viewer_groups": {name: int(mask.sum()) for name, mask in slices.items()},
         "candidate_ceiling_recall": float((np.add.reduceat(labels, starts) / relevant).mean()),
         "metrics": metrics, "lambdarank_minus_pass_through": comparison,
         "table": str(table_dir), "table_rows_sha256": manifest["rows_sha256"],
@@ -117,7 +176,7 @@ def evaluate(table_dir, model_dir, output, ks=KS, bootstrap=1000):
 
 
 def format_table(report, ks=KS):
-    names = [f"{metric}_at_{k}" for k in ks for metric in ("ndcg", "recall")] + ["precision_at_10", "hit_rate_at_10"]
+    names = [f"{metric}_at_{k}" for k in ks for metric in ("ndcg", "recall")] + ["precision_at_12", "hit_rate_at_12"]
     lines = ["| Method / users | Users | " + " | ".join(n.replace("_at_", "@") for n in names) + " |",
              "|---|---:|" + "---:|" * len(names)]
     for key, row in report["metrics"].items():

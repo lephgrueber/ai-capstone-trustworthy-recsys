@@ -22,10 +22,26 @@ def _unique(values: list[str], name: str) -> list[str]:
     return values
 
 
+TagPhrase = Annotated[str, Field(min_length=1, max_length=40)]
+
+
 class RatingRecord(StrictModel):
     movie_id: MovieId
     rating: float = Field(ge=0.5, le=5.0, multiple_of=0.5)
     rated_at: datetime
+    # Optional phrases describing the movie (feedback §4); tagged_at is their latest change.
+    tags: list[TagPhrase] | None = Field(default=None, max_length=5)
+    tagged_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def tags_have_time(self):
+        if bool(self.tags) != (self.tagged_at is not None):
+            raise ValueError("tags and tagged_at must be supplied together")
+        if self.tagged_at is not None and (self.tagged_at.tzinfo is None or self.tagged_at.utcoffset() != timedelta(0)):
+            raise ValueError("tagged_at must be UTC")
+        if self.tags and any(not tag.strip() for tag in self.tags):
+            raise ValueError("tags must not be blank")
+        return self
 
     @field_validator("rating")
     @classmethod
@@ -74,6 +90,8 @@ class RatingStatistics(StrictModel):
     mean_rating: float | None = None
     rating_count: int | None = Field(default=None, ge=0)
     days_inactive: float | None = Field(default=None, ge=0)
+    # Days since the latest rating >= 4.0 (feedback §3); missing until the first like.
+    days_since_like: float | None = Field(default=None, ge=0)
     complete: bool
 
 
@@ -82,11 +100,28 @@ class ModelQuery(StrictModel):
     known_user_id: str | None = Field(default=None, min_length=1, max_length=64)
     rated_movie_ids: list[MovieId] = Field(default_factory=list, max_length=500)
     rating_statistics: RatingStatistics | None = None
+    # Optional model context derived from saved browser ratings (feedback §2-§3). When
+    # present, ratings/times align with history_items; None marks an unknown value
+    # (e.g. a legacy favorite). Times and as_of are Unix seconds.
+    history_ratings: list[float | None] = Field(default_factory=list, max_length=500)
+    history_times: list[float | None] = Field(default_factory=list, max_length=500)
+    disliked_items: list[MovieId] = Field(default_factory=list, max_length=500)
+    as_of: float | None = None
 
-    @field_validator("history_items", "rated_movie_ids")
+    @field_validator("history_items", "rated_movie_ids", "disliked_items")
     @classmethod
     def unique_movie_ids(cls, values: list[str], info):
         return _unique(values, info.field_name)
+
+    @model_validator(mode="after")
+    def aligned_history_context(self):
+        for name in ("history_ratings", "history_times"):
+            values = getattr(self, name)
+            if values and len(values) != len(self.history_items):
+                raise ValueError(f"{name} must align with history_items")
+        if set(self.disliked_items) & set(self.history_items):
+            raise ValueError("a movie cannot be both a favorite and a dislike")
+        return self
 
 
 class ComponentInfo(StrictModel):
@@ -108,7 +143,7 @@ class ScoredMovie(StrictModel):
 
 
 class CandidateBatch(StrictModel):
-    candidates: list[ScoredMovie] = Field(max_length=500)
+    candidates: list[ScoredMovie] = Field(max_length=1000)
     component: ComponentInfo
     warnings: list[str] = Field(default_factory=list, max_length=20)
 

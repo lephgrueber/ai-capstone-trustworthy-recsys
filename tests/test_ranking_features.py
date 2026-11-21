@@ -123,3 +123,116 @@ def test_table_labels_mark_held_out_relevant_candidates():
 def test_release_year_parsing():
     assert release_year("Toy Story (1995)") == 1995
     assert np.isnan(release_year("Untitled"))
+
+
+def test_tower_similarity_matches_feedback_example():
+    # Candidate d has cosine 0.8 with favorite a and 0.2 with favorite b.
+    vectors = np.array([[.8, .6], [.2, np.sqrt(1 - .04)], [0, 1], [1, 0]], dtype="float32")
+    features = fitted().attach_item_vectors(vectors)
+    out = features.build(["a", "b"], [3], user_id="u1")
+    assert out[0, COLUMN["tower_cosine_max"]] == pytest.approx(.8)
+    assert out[0, COLUMN["tower_cosine_mean"]] == pytest.approx(.5)  # mean of scores, not of vectors
+    assert np.isnan(fitted().build(["a"], [3])[0, COLUMN["tower_cosine_max"]])  # no vectors attached
+
+
+def test_dislike_features_are_separate_and_missing_is_not_zero():
+    features = fitted().attach_item_vectors(np.eye(4, dtype="float32"))
+    unknown = features.build(["a"], [2, 3])
+    assert np.isnan(unknown[:, COLUMN["dislike_count_log"]]).all()
+    none = features.build(["a"], [2, 3], disliked_items=[])
+    assert (none[:, COLUMN["dislike_count_log"]] == 0).all()
+    assert np.isnan(none[:, COLUMN["dislike_tower_cosine_max"]]).all()
+    some = features.build(["a"], [2, 3], disliked_items=["c"])
+    assert some[0, COLUMN["dislike_count_log"]] == pytest.approx(np.log1p(1))
+    assert some[:, COLUMN["dislike_tower_cosine_max"]].tolist() == [1, 0]
+    # Audience cosine of c with itself: 2 likers shared of 2 -> 1.
+    assert some[0, COLUMN["dislike_audience_cosine_max"]] == pytest.approx(1)
+    # Favorite features are unchanged by dislikes.
+    assert np.array_equal(none[:, :20], some[:, :20], equal_nan=True)
+
+
+def test_metadata_comparisons_and_missing_rules(tmp_path):
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from trustworthy_recsys.data.reporting import hashes, write_json
+    from trustworthy_recsys.data.tags import build as build_tags
+    from test_metadata_tags import FakeEncoder
+
+    meta = tmp_path / "meta"
+    meta.mkdir()
+    pq.write_table(pa.Table.from_pylist([
+        {"movie_id": "a", "imdb_id": None, "runtime_minutes": 100.0, "directors": ["d1"], "writers": ["w1"], "cast": []},
+        {"movie_id": "b", "imdb_id": None, "runtime_minutes": 140.0, "directors": ["d2"], "writers": [], "cast": ["c1"]},
+        {"movie_id": "c", "imdb_id": None, "runtime_minutes": None, "directors": ["d1", "d3"], "writers": ["w9"], "cast": ["c1"]},
+        {"movie_id": "d", "imdb_id": None, "runtime_minutes": 90.0, "directors": [], "writers": ["w1"], "cast": []},
+    ]), meta / "movie_metadata.parquet")
+    write_json(meta / "manifest.json", {"output_sha256": hashes(meta / "movie_metadata.parquet")["sha256"]})
+    run = tmp_path / "run"
+    run.mkdir()
+    early = pd.Timestamp(0, unit="s", tz="UTC")
+    pq.write_table(pa.table({"user_id": ["1"] * 4, "movie_id": ["a", "c", "c", "d"],
+                             "tag": ["funny", "hilarious", "space travel", "family"],
+                             "timestamp_utc": [early, early, early, pd.Timestamp(CUTOFF + DAY, unit="s", tz="UTC")]}),
+                   run / "tags.parquet")
+    build_tags(run, tmp_path / "tags", encoder_name="fake", encoder=FakeEncoder())
+    features = fitted().attach_metadata(meta, tmp_path / "tags")
+
+    out = features.build(["a", "b"], [2, 3], user_id="u1")
+    c, d = out
+    # c shares director d1 with a (1 of 2 favorites) and cast c1 with b (1 of 1 favorite with cast).
+    assert c[COLUMN["director_shared_count"]] == 1 and c[COLUMN["director_share"]] == pytest.approx(.5)
+    assert c[COLUMN["cast_share"]] == 1 and c[COLUMN["writer_share"]] == 0
+    # d lists no director (unknown -> NaN) but shares writer w1 with a.
+    assert np.isnan(d[COLUMN["director_share"]]) and d[COLUMN["writer_share"]] == 1
+    # Runtime gap to mean favorite runtime 120; c's runtime is unknown.
+    assert np.isnan(c[COLUMN["runtime_gap"]]) and d[COLUMN["runtime_gap"]] == 30
+    # Only favorite a is tagged before the cutoff; d's tag comes later, so d is untagged.
+    assert c[COLUMN["tag_comparable_favorites"]] == 1
+    assert c[COLUMN["tag_cosine_max"]] > 0.5 and np.isnan(d[COLUMN["tag_cosine_max"]])
+    assert c[COLUMN["tag_phrase_match_max"]] == pytest.approx(
+        np.mean([FakeEncoder().encode(["hilarious"])[0] @ FakeEncoder().encode(["funny"])[0],
+                 FakeEncoder().encode(["space travel"])[0] @ FakeEncoder().encode(["funny"])[0]]), abs=1e-2)
+    disliked = features.build(["b"], [2], user_id="u1", disliked_items=["a"])[0]
+    assert disliked[COLUMN["dislike_director_share"]] == 1 and disliked[COLUMN["dislike_tag_cosine_max"]] > .5
+
+
+def test_record_rating_statistics_match_movielens_lookup():
+    from trustworthy_recsys.ranking.features import RATING_HISTORY, rating_statistics_from_record
+    # u3 before the cutoff: liked b (day 395, 4.0) and c (day 396, 4.5), rated d 2.0 on day 397.
+    record = {"history_items": ["b", "c"], "history_ratings": [4.0, 4.5], "history_times": [395 * DAY, 396 * DAY],
+              "other_rated_items": ["d"], "other_rated_ratings": [2.0], "other_rated_times": [397 * DAY]}
+    stats = rating_statistics_from_record(record, CUTOFF)
+    assert stats.days_since_like == pytest.approx(4) and stats.days_inactive == pytest.approx(3)
+    features = fitted()
+    looked_up = features.build(["b", "c"], [0], user_id="u3")
+    passed = features.build(["b", "c"], [0], rating_statistics=stats)
+    columns = [COLUMN[name] for name in RATING_HISTORY]
+    assert np.allclose(looked_up[:, columns], passed[:, columns])
+    never_liked = rating_statistics_from_record({"other_rated_ratings": [1.0], "other_rated_times": [5]}, CUTOFF)
+    assert never_liked.days_since_like is None and never_liked.rating_count == 1
+
+
+def test_masking_is_per_viewer_and_deterministic():
+    from trustworthy_recsys.ranking.train import mask_columns
+    users = np.repeat([f"u{i}" for i in range(200)], 3)
+    table = {"user_id": users, "user_mean_rating": np.ones(600, dtype="float32")}
+    half = mask_columns(dict(table), {"user_mean_rating": .5}, 0)["user_mean_rating"]
+    assert 60 < np.isnan(half).sum() / 3 < 140
+    assert all(len(set(np.isnan(half[i:i + 3]))) == 1 for i in range(0, 600, 3))  # whole viewers
+    assert np.array_equal(np.isnan(half), np.isnan(mask_columns(dict(table), {"user_mean_rating": .5}, 0)["user_mean_rating"]))
+    assert np.isnan(mask_columns(dict(table), {"user_mean_rating": 1.0}, 0)["user_mean_rating"]).all()
+
+
+def test_popularity_variants_weight_likes_by_age():
+    from trustworthy_recsys.data.windows import Events
+    from trustworthy_recsys.ranking.popularity import popularity_scores, ranked
+    as_of = 1000 * DAY
+    events = Events(np.array([1, 2, 3, 4]), np.array([10, 10, 20, 20]), np.array([5, 4, 4.5, 3.0], dtype="float32"),
+                    np.array([as_of - 400 * DAY, as_of - 500 * DAY, as_of - 180 * DAY, as_of - DAY]))
+    scores = popularity_scores(events, {"10": 0, "20": 1}, 2, as_of, recent_days=(365,), half_lives=(180,))
+    assert scores["all_time"].tolist() == [2, 1]  # the 3.0 rating is not a like
+    assert scores["recent_365d"].tolist() == [0, 1]
+    assert scores["half_life_180d"][1] == pytest.approx(.5)
+    assert scores["half_life_180d"][0] == pytest.approx(.5 ** (400 / 180) + .5 ** (500 / 180))
+    assert ranked(scores["half_life_180d"]).tolist() == [1, 0]  # the recent like outweighs two old ones

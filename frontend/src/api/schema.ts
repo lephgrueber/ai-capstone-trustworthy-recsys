@@ -378,6 +378,10 @@ export interface components {
              * Format: date-time
              */
             rated_at: string;
+            /** Tags */
+            tags?: string[] | null;
+            /** Tagged At */
+            tagged_at?: string | null;
         };
         /** RecommendationItem */
         RecommendationItem: {
@@ -659,7 +663,7 @@ export interface operations {
                     "application/json": components["schemas"]["RecommendationResponse"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;

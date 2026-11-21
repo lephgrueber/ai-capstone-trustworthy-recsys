@@ -2,12 +2,16 @@
 
 from pathlib import Path
 
+import math
+import time
+
 import numpy as np
 import torch
 
 from trustworthy_recsys.data.retrieval_inputs import ModelInputs, read_json
 from trustworthy_recsys.data.reporting import hashes
-from .model import load_model
+from eval.harness import RecommendationRequest
+from .model import history_batch, load_model
 from .index import filtered_search
 from .weaviate_store import WeaviateIndex
 
@@ -33,7 +37,7 @@ class RetrievalRecommender:
         for name,digest in read_json(root/'manifest.json')['outputs'].items():
             if hashes(root/name)['sha256']!=digest:
                 raise ValueError(f'Model artifact hash mismatch: {name}')
-        return inputs,load_model(root/'model.pt',inputs.item_features),np.load(root/'item_embeddings.npy')
+        return inputs,load_model(root/'model.pt',inputs.item_features,inputs.item_ids),np.load(root/'item_embeddings.npy')
 
     @classmethod
     def load(cls,inputs_dir,model_dir):
@@ -59,6 +63,7 @@ class RetrievalRecommender:
 
     def excluded(self,request):
         seen={self.inputs.item_map[x] for x in request.history_items if x in self.inputs.item_map}
+        seen.update(self.inputs.item_map[x] for x in getattr(request,'exclude_items',()) if x in self.inputs.item_map)
         user=self.inputs.user_map.get(request.user_id)
         if user is not None:
             lo,hi=self.inputs.seen_offsets[user:user+2]
@@ -72,16 +77,41 @@ class RetrievalRecommender:
         profile=np.concatenate([self.inputs.item_features[indices].mean(axis=0),[np.log1p(len(indices))/10]]).astype('float32')
         return profile
 
+    def history_context(self,request):
+        """Known favorites (deduplicated, chronological) with aligned rating/time, plus dislikes."""
+        ratings=getattr(request,'history_ratings',()) or ()
+        times=getattr(request,'history_times',()) or ()
+        seen,indices,stars,stamps=set(),[],[],[]
+        for position,item in enumerate(request.history_items):
+            index=self.inputs.item_map.get(item)
+            if index is None or index in seen:
+                continue
+            seen.add(index)
+            indices.append(index)
+            stars.append(_number(ratings,position))
+            stamps.append(_number(times,position))
+        dislikes=list(dict.fromkeys(self.inputs.item_map[x] for x in getattr(request,'disliked_items',()) or ()
+                                    if x in self.inputs.item_map))
+        as_of=getattr(request,'as_of',None)
+        return indices,stars,stamps,dislikes,time.time() if as_of is None else as_of
+
     @torch.inference_mode()
-    def query_vector(self,history):
+    def query_vector(self,history,request=None):
         profile=self.query_profile(history)
-        return None if profile is None else self.model.encode_user(torch.from_numpy(profile).unsqueeze(0)).numpy()[0]
+        if profile is None:
+            return None
+        batch=None
+        if self.model.history.active:
+            request=request or RecommendationRequest('',list(history))
+            indices,stars,stamps,dislikes,as_of=self.history_context(request)
+            batch=history_batch(self.model.history,len(self.inputs.item_ids),[indices],[stars],[stamps],[as_of],[dislikes])
+        return self.model.encode_user(torch.from_numpy(profile).unsqueeze(0),batch).numpy()[0]
 
     def recommend_indices(self,request,k):
         if k<=0:
             raise ValueError('k must be positive')
         excluded=self.excluded(request)
-        query=self.query_vector(request.history_items)
+        query=self.query_vector(request.history_items,request)
         if query is None:
             return self.popularity_indices(excluded,k),True
         return filtered_search(self.index,query,k,excluded),False
@@ -91,7 +121,7 @@ class RetrievalRecommender:
         if k<=0:
             raise ValueError('k must be positive')
         excluded=self.excluded(request)
-        query=self.query_vector(request.history_items)
+        query=self.query_vector(request.history_items,request)
         if query is None:
             return self.popularity_indices(excluded,k),None,True
         if self.item_vectors is None:
@@ -111,3 +141,18 @@ class RetrievalRecommender:
     def __call__(self,request,k):
         indices,_=self.recommend_indices(request,k)
         return [self.inputs.item_ids[i] for i in indices]
+
+
+def _number(values,position):
+    value=values[position] if position<len(values) else None
+    return math.nan if value is None else float(value)
+
+
+def request_from_record(record,as_of=None,dislike_threshold=2.0):
+    """Request for a window-export record: inputs only, never its label fields."""
+    other=record.get('other_rated_items',())
+    other_ratings=record.get('other_rated_ratings',())
+    return RecommendationRequest(
+        record['user_id'],list(record['history_items']),tuple(other),
+        tuple(record.get('history_ratings',())),tuple(record.get('history_times',())),
+        tuple(item for item,rating in zip(other,other_ratings) if rating<=dislike_threshold),as_of)

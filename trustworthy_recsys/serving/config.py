@@ -24,8 +24,12 @@ class Settings:
     feedback_db: Path = Path('data/feedback/movie.sqlite3')
     feedback_epsilon: float = 0.1
     feedback_traffic: str = 'pilot'
+    visitor_tags: str = 'off'
+    visitor_tag_db: Path | None = None
 
     def __post_init__(self) -> None:
+        if self.visitor_tags not in {'off', 'record'}:
+            raise ValueError('visitor tags must be off or record')
         if self.feedback_mode not in {'off', 'observe', 'randomized'}:
             raise ValueError('feedback mode must be off, observe or randomized')
         if not 0 < self.feedback_epsilon <= 1:
@@ -49,13 +53,17 @@ class Settings:
             budget = int(os.getenv("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET", default_budget))
         except ValueError as error:
             raise ValueError("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET must be an integer") from error
-        if not 10 <= budget <= 500:
-            raise ValueError("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET must be between 10 and 500")
+        # Up to 1,000 so a deeper retrieval depth chosen on dev (feedback §7) can be served.
+        if not 10 <= budget <= 1000:
+            raise ValueError("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET must be between 10 and 1000")
         return cls(
             feedback_mode=os.getenv('TRUSTWORTHY_RECSYS_FEEDBACK_MODE', 'off'),
             feedback_db=Path(os.getenv('TRUSTWORTHY_RECSYS_FEEDBACK_DB', 'data/feedback/movie.sqlite3')),
             feedback_epsilon=float(os.getenv('TRUSTWORTHY_RECSYS_FEEDBACK_EPSILON', '0.1')),
             feedback_traffic=os.getenv('TRUSTWORTHY_RECSYS_FEEDBACK_TRAFFIC', 'pilot'),
+            visitor_tags=os.getenv('TRUSTWORTHY_RECSYS_VISITOR_TAGS', 'off'),
+            visitor_tag_db=Path(os.environ['TRUSTWORTHY_RECSYS_VISITOR_TAG_DB'])
+            if os.getenv('TRUSTWORTHY_RECSYS_VISITOR_TAG_DB') else None,
             backend_mode=os.getenv("TRUSTWORTHY_RECSYS_BACKEND", "fixture"),
             run_dir=Path(run) if run else None,
             retrieval_inputs_dir=Path(retrieval_inputs) if retrieval_inputs else None,

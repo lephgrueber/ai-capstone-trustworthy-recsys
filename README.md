@@ -31,6 +31,15 @@ The repository currently includes:
 
 Uniform-random, popularity, genre-aware, and two-tower retrieval are implemented. The two-tower training, publication, evaluation, standalone prediction, and FastAPI learned-serving paths are present. A portable trained bundle is tracked through Git LFS; extracted and locally published runtime artifacts remain ignored. Retrieval-specific slices are implemented in the retrieval evaluator; the general evaluation-slice file remains a placeholder. Optional LambdaRank reranking is implemented. Bounded English genre/title search is implemented, with a main-page search bar and optional browser voice input. Structured preference controls remain functional; arbitrary plot, actor and mood search is not supported. MovieLens does not supply logged propensities. OPE therefore runs on the separate Open Bandit fashion dataset and does not establish policy value for the MovieLens model.
 
+## M3 feedback response
+
+The [M3 feedback response](docs/m3_feedback_response.md) documents the Train A / Train B /
+dev / test workflow (`python -m trustworthy_recsys.workflow`), the new tower and reranker
+features (favorite vectors, dislikes, IMDb credits and runtime, encoded tags), rating-history
+inputs that match browser requests, typo-tolerant title search, review tags, missing-input
+handling, target sampling and tower tuning, display-length selection, and paired ablation
+intervals and group diagnostics, together with the dev and test results.
+
 ## Latest validation and search
 
 See the [validation results](docs/validation_20261109.md) for completed checks and known limitations.

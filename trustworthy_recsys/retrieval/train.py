@@ -1,6 +1,13 @@
-"""Train on historical prefixes; select checkpoints using validation, never test."""
+"""Train on historical prefixes; select checkpoints using dev, never test.
+
+Selection (M3 feedback §1): macro Recall@500 over *every* viewer in a dev example file
+(default: the window export dev.jsonl when given, else the run's validation_warm.jsonl).
+With ``select=False`` (final refit / deployment fit) no labels are read: the towers train
+for exactly ``epochs`` epochs and the last checkpoint is kept.
+"""
 
 import argparse
+from dataclasses import asdict
 import hashlib
 import heapq
 import json
@@ -8,16 +15,18 @@ from pathlib import Path
 import time
 
 import numpy as np
+import pandas as pd
 import torch
 from torch.nn import functional as F
 
 from eval.harness import RecommendationRequest
 from trustworthy_recsys.evaluation.metrics import recall_at_k
 from trustworthy_recsys.data.retrieval_inputs import ModelInputs
+from trustworthy_recsys.data.windows import load_records, read_window_meta
 from trustworthy_recsys.data.reporting import hashes, write_json, code_provenance
-from .model import TwoTower, load_model
+from .model import HistoryConfig, TwoTower, load_model
 from .index import ExactIndex
-from .recommender import RetrievalRecommender
+from .recommender import RetrievalRecommender, request_from_record
 
 
 def sampled_examples(path,limit,seed):
@@ -47,9 +56,127 @@ def negative_mask(inputs,pair_indices,targets):
     return mask
 
 
+class PairHistory:
+    """Favorite/dislike tensors for training pairs, built only from strictly earlier ratings."""
+
+    def __init__(self,inputs,config):
+        if not inputs.has_preference_history:
+            raise ValueError('History inputs need model inputs version 1.1+; re-run retrieval_inputs')
+        self.inputs,self.config=inputs,config
+        users=np.asarray(inputs.pair_users,dtype=np.int64)
+        self.end=np.asarray(inputs.context_ends,dtype=np.int64)
+        self.start=np.maximum(np.asarray(inputs.positive_offsets)[users],self.end-config.max_history)
+        # Global key (user, time) locates each pair's dislikes strictly before its target.
+        counts=np.diff(np.asarray(inputs.negative_offsets))
+        owner=np.repeat(np.arange(len(counts),dtype=np.int64),counts)
+        keys=(owner<<32)+np.asarray(inputs.negative_times,dtype=np.int64)
+        self.neg_end=np.searchsorted(keys,(users<<32)+np.asarray(inputs.target_times,dtype=np.int64),side='left')
+        self.neg_start=np.maximum(np.asarray(inputs.negative_offsets)[users],self.neg_end-config.max_dislikes)
+        self.n_items=len(inputs.item_ids)
+
+    def _gather(self,values,start,end,width,fill):
+        idx=start[:,None]+np.arange(width)[None,:]
+        mask=idx<end[:,None]
+        out=np.where(mask,np.asarray(values)[np.minimum(idx,max(len(values)-1,0))] if len(values) else fill,fill)
+        return out,mask
+
+    def batch(self,pairs):
+        c,inputs=self.config,self.inputs
+        start,end=self.start[pairs],self.end[pairs]
+        items,mask=self._gather(inputs.positive_items,start,end,c.max_history,self.n_items)
+        stars,_=self._gather(inputs.positive_ratings,start,end,c.max_history,4.0)
+        stamps,_=self._gather(inputs.positive_times,start,end,c.max_history,0)
+        age=np.maximum(np.asarray(inputs.target_times)[pairs][:,None]-stamps,0)/86400*mask
+        dis,dmask=self._gather(inputs.negative_items,self.neg_start[pairs],self.neg_end[pairs],c.max_dislikes,self.n_items)
+        return {'items':torch.from_numpy(items.astype(np.int64)),'mask':torch.from_numpy(mask),
+                'ratings':torch.from_numpy(stars.astype('float32')),'age_days':torch.from_numpy(age.astype('float32')),
+                'dislikes':torch.from_numpy(dis.astype(np.int64)),'dislike_mask':torch.from_numpy(dmask)}
+
+    def latest_dislike(self,pairs):
+        """Most recent dislike before each target, or -1."""
+        has=self.neg_end[pairs]>np.asarray(self.inputs.negative_offsets)[np.asarray(self.inputs.pair_users)[pairs]]
+        return np.where(has,np.asarray(self.inputs.negative_items)[np.maximum(self.neg_end[pairs]-1,0)] if len(self.inputs.negative_items) else -1,-1)
+
+
+SAMPLING_MODES = ("all", "spaced", "fixed", "rotate")
+
+
+class TargetSampler:
+    """Per-epoch training targets drawn from all-target inputs (feedback §6).
+
+    all: every stored pair. spaced: up to `cap` evenly spaced targets per viewer (M3's
+    rule), the same every epoch. fixed: one random draw without repeats, reused every
+    epoch. rotate: the same first draw as `fixed`, then a fresh draw each later epoch.
+    """
+
+    def __init__(self, pair_users, cap=0, mode="all", seed=0):
+        if mode not in SAMPLING_MODES:
+            raise ValueError(f"mode must be one of {SAMPLING_MODES}")
+        if mode != "all" and cap <= 0:
+            raise ValueError("cap must be positive for spaced, fixed or rotate sampling")
+        self.users = np.asarray(pair_users, dtype=np.int64)
+        if len(self.users) and (np.diff(self.users) < 0).any():
+            raise ValueError("Pairs must be grouped by viewer")
+        self.mode, self.cap, self.seed = mode, cap, seed
+        _, self.starts, self.counts = np.unique(self.users, return_index=True, return_counts=True)
+        self.rank = np.arange(len(self.users)) - np.repeat(self.starts, self.counts)
+        self.n_user = np.repeat(self.counts, self.counts)
+
+    def epoch(self, epoch):
+        if self.mode == "all":
+            return np.arange(len(self.users))
+        if self.mode == "spaced":
+            # Evenly spaced positions among each viewer's pairs (same as np.linspace per viewer).
+            take = np.minimum(self.counts, self.cap)
+            keep = np.zeros(len(self.users), dtype=bool)
+            for start, n, k in zip(self.starts, self.counts, take):
+                keep[start + np.unique(np.linspace(0, n - 1, k, dtype=int))] = True
+            return np.flatnonzero(keep)
+        draw = 0 if self.mode == "fixed" else epoch
+        keys = np.random.default_rng([self.seed, draw]).random(len(self.users))
+        order = np.lexsort((keys, self.users))
+        rank = np.empty(len(order), dtype=np.int64)
+        rank[order] = self.rank
+        return np.flatnonzero(rank < self.cap)
+
+    def expected_frequency(self, targets, n_items, epochs):
+        """Expected per-epoch draws of each movie (rotate); empirical counts otherwise."""
+        if self.mode == "rotate":
+            weight = np.minimum(self.n_user, self.cap) / self.n_user
+            return np.bincount(targets, weights=weight, minlength=n_items)
+        return np.bincount(targets[self.epoch(0)], minlength=n_items).astype("float64")
+
+
+def target_ratings(inputs):
+    """Star rating of each training pair's target, looked up in the viewer's positives."""
+    if not inputs.has_preference_history:
+        raise ValueError('Five-star weighting needs model inputs version 1.1+')
+    counts=np.diff(np.asarray(inputs.positive_offsets))
+    owner=np.repeat(np.arange(len(counts),dtype=np.int64),counts)
+    keys=(owner<<32)+np.asarray(inputs.positive_items,dtype=np.int64)
+    order=np.argsort(keys,kind='stable')
+    query=(np.asarray(inputs.pair_users,dtype=np.int64)<<32)+np.asarray(inputs.target_items,dtype=np.int64)
+    position=order[np.searchsorted(keys[order],query)]
+    if not np.array_equal(keys[position],query):
+        raise ValueError('Training target missing from positive history')
+    return np.asarray(inputs.positive_ratings)[position]
+
+
+def selection_score(recommender,records,k,as_of=None,dislike_threshold=2.0):
+    return float(np.mean([recall_at_k(r['relevant_items'],recommender(request_from_record(r,as_of,dislike_threshold),k),k)
+                          for r in records]))
+
+
 def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=42,
-          embedding_dim=32,max_pairs=0,validation_users=512,threads=2):
-    if min(epochs,batch_size,validation_users,threads,embedding_dim)<=0 or batch_size<2 or learning_rate<=0 or max_pairs<0:
+          embedding_dim=32,max_pairs=0,validation_users=0,threads=2,selection_examples=None,
+          selection_k=500,select=True,temperature=.1,history=None,dislike_penalty=0.0,movie_side=None,
+          export_as_of=None,five_star_weight=None,target_sampling=None,identity_dropout=0.0):
+    """`movie_side`: MovieSideConfig fields (metadata/tag dirs and which inputs to use).
+    `export_as_of`: Unix seconds for the saved item vectors' tag summaries (default: the
+    end of the fitting window)."""
+    """`validation_users=0` scores every selection viewer; a positive value hash-samples them."""
+    if min(epochs,batch_size,threads,embedding_dim,selection_k)<=0 or validation_users<0 or batch_size<2 \
+            or learning_rate<=0 or max_pairs<0 or temperature<=0:
         raise ValueError('Invalid training configuration')
     root=Path(output_dir)
     if root.exists():
@@ -58,42 +185,94 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
     torch.manual_seed(seed)
     torch.use_deterministic_algorithms(True)
     inputs=ModelInputs(inputs_dir,verify=True)
-    source=Path(inputs.meta['source_run'])
-    validation_path=source/inputs.meta['scenario']/'validation_warm.jsonl'
-    source_manifest=json.loads((source/'manifest.json').read_text())
-    relative=validation_path.relative_to(source).as_posix()
-    if hashes(validation_path)['sha256']!=source_manifest['outputs'][relative]['sha256']:
-        raise ValueError('Validation input hash mismatch')
-    validation=sampled_examples(validation_path,validation_users,seed)
-    if not validation:
-        raise ValueError('No warm validation examples available for checkpoint selection')
+    history_config=HistoryConfig(**(history or {}))
+    validation,validation_path,as_of=[],None,int(pd.Timestamp(inputs.meta['training_cutoff_utc']).timestamp())
+    if select:
+        validation_path=Path(selection_examples) if selection_examples else None
+        if validation_path is None:
+            source=Path(inputs.meta['source_run'])
+            validation_path=source/inputs.meta['scenario']/'validation_warm.jsonl'
+            source_manifest=json.loads((source/'manifest.json').read_text())
+            relative=validation_path.relative_to(source).as_posix()
+            if hashes(validation_path)['sha256']!=source_manifest['outputs'][relative]['sha256']:
+                raise ValueError('Validation input hash mismatch')
+        else:
+            window=read_window_meta(validation_path)
+            cutoff=int(pd.Timestamp(inputs.meta['training_cutoff_utc']).timestamp())
+            if window is not None and window['label_start']<cutoff:
+                raise ValueError('Selection labels overlap the towers\' fitting window')
+            if window is not None:
+                as_of=window['history_end']
+        validation=(sampled_examples(validation_path,validation_users,seed) if validation_users
+                    else list(load_records(validation_path)))
+        if not validation:
+            raise ValueError('No dev examples available for checkpoint selection')
     n=len(inputs.target_items)
     rng=np.random.default_rng(seed)
-    selected=np.sort(rng.choice(n,size=min(max_pairs,n),replace=False)) if max_pairs else np.arange(n)
+    sampler=TargetSampler(inputs.pair_users,**(target_sampling or {}))
+    selected=sampler.epoch(0)
+    if max_pairs:
+        selected=np.sort(rng.choice(selected,size=min(max_pairs,len(selected)),replace=False))
     if len(selected)<2:
         raise ValueError('Need at least two training pairs')
-    frequencies=np.bincount(inputs.target_items[selected],minlength=len(inputs.item_ids)).astype('float32')
-    log_q=torch.from_numpy(np.log(np.maximum(frequencies,1)/len(selected)))
-    model=TwoTower(inputs.item_features,embedding_dim=embedding_dim)
-    dense=torch.optim.AdamW([p for name,p in model.named_parameters() if name!='identity.weight'],lr=learning_rate,weight_decay=1e-4)
-    sparse=torch.optim.SparseAdam([model.identity.weight],lr=learning_rate)
+    if sampler.mode=='rotate' and not max_pairs:
+        # Redrawn targets: correct by how often each movie is expected to be drawn per epoch.
+        frequencies=sampler.expected_frequency(np.asarray(inputs.target_items),len(inputs.item_ids),epochs)
+    else:
+        frequencies=np.bincount(inputs.target_items[selected],minlength=len(inputs.item_ids)).astype('float64')
+    log_q=torch.from_numpy(np.log(np.maximum(frequencies,1e-3)/frequencies.sum()).astype('float32'))
+    seen_pairs=np.zeros(n,dtype=bool)
+    fit_end=int(pd.Timestamp(inputs.meta['training_cutoff_utc']).timestamp())
+    export_as_of=fit_end if export_as_of is None else int(export_as_of)
+    side=None
+    if movie_side:
+        from .movie_side import MovieSide, MovieSideConfig
+        side=MovieSide(MovieSideConfig(**movie_side),inputs.item_ids)
+    model=TwoTower(inputs.item_features,embedding_dim=embedding_dim,history=history_config,side=side,
+                   identity_dropout=identity_dropout)
+    snapshots=None
+    if side is not None and side.config.tags:
+        # Each target (and its favorites) sees tags first used before Jan 1 of the target's year.
+        years=pd.to_datetime(np.asarray(inputs.target_times),unit='s',utc=True).year
+        stamps,stacked=side.tag_snapshots(int(years.min()),int(years.max()))
+        pad=torch.zeros(stacked.shape[0],1,stacked.shape[2])
+        snapshots=(stamps,torch.cat([stacked,pad],dim=1))
+    pair_history=PairHistory(inputs,history_config) if history_config.active or dislike_penalty else None
+    example_weights=None
+    if five_star_weight:
+        # Weight each example by its target's stars: five-star targets count five_star_weight.
+        example_weights=np.where(target_ratings(inputs)>=5.0,float(five_star_weight),1.0).astype('float32')
+    dense=torch.optim.AdamW(model.dense_parameters(),lr=learning_rate,weight_decay=1e-4)
+    sparse=torch.optim.SparseAdam(model.sparse_parameters(),lr=learning_rate)
     root.mkdir(parents=True)
     (root/'INCOMPLETE').write_text('Training/embedding export in progress.\n')
     np.save(root/'training_pair_indices.npy',selected)
-    write_json(root/'validation_user_ids.json',[record['user_id'] for record in validation])
+    if validation_users:
+        write_json(root/'validation_user_ids.json',[record['user_id'] for record in validation])
     config={'architecture':model.config,'epochs':epochs,'batch_size':batch_size,'learning_rate':learning_rate,
-            'seed':seed,'threads':threads,'device':'cpu','temperature':.1,'log_q_correction':True,
+            'seed':seed,'threads':threads,'device':'cpu','temperature':temperature,'log_q_correction':True,
             'available_training_pairs':n,'selected_training_pairs':len(selected),'max_pairs':max_pairs,
-            'validation_population':'validation_warm','validation_users':len(validation),
-            'selection_metric':'macro Recall@100 on deterministic validation user sample',
+            'target_sampling':{'mode':sampler.mode,'cap':sampler.cap,'seed':sampler.seed},
+            'validation_population':str(validation_path) if select else None,
+            'validation_users':len(validation),'validation_sampled':bool(validation_users),
+            'selection_metric':f'macro Recall@{selection_k} over every selection viewer' if select and not validation_users
+                else f'macro Recall@{selection_k} on deterministic hash sample' if select
+                else 'none: fixed epochs, last checkpoint (labels never read)',
             'input_manifest_sha256':hashes(Path(inputs_dir)/'manifest.json')['sha256'],
-            'validation_sha256':hashes(validation_path)['sha256'],'torch_version':torch.__version__,
-            'code':code_provenance(),'loss':'in-batch sampled softmax, empirical target-frequency logQ; historical positives and duplicate targets masked'}
+            'validation_sha256':hashes(validation_path)['sha256'] if select else None,'torch_version':torch.__version__,
+            'code':code_provenance(),'loss':'in-batch sampled softmax, empirical target-frequency logQ; historical positives and duplicate targets masked'
+                    +(f'; + {dislike_penalty} x softplus((s(latest earlier dislike) - s(target)) / T)' if dislike_penalty else ''),
+            'history':asdict(history_config),'dislike_penalty':dislike_penalty,'five_star_weight':five_star_weight,
+            'movie_side':None if side is None else {**asdict(side.config),'sources':side.sources},
+            'export_as_of_utc':pd.Timestamp(export_as_of,unit='s',tz='UTC').isoformat()}
     best=-1.0
     records=[]
     started=time.perf_counter()
     for epoch in range(epochs):
         model.train()
+        if epoch and sampler.mode=='rotate' and not max_pairs:
+            selected=sampler.epoch(epoch)
+        seen_pairs[selected]=True
         order=rng.permutation(selected)
         loss_sum=0.0
         trained=0
@@ -107,10 +286,33 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
             target_tensor=torch.from_numpy(target)
             dense.zero_grad(set_to_none=True)
             sparse.zero_grad(set_to_none=True)
-            logits=model.encode_user(features) @ model.encode_item(target_tensor).T / .1
+            snap=None
+            if snapshots is not None:
+                snap=torch.from_numpy(np.searchsorted(snapshots[0],np.asarray(inputs.target_times)[batch],side='right')-1)
+            history_batch_=pair_history.batch(batch) if history_config.active else None
+            if history_batch_ is not None and snap is not None and history_config.metadata:
+                history_batch_['favorite_tags']=snapshots[1][snap[:,None],history_batch_['items']]
+            user_vectors=model.encode_user(features,history_batch_)
+            target_vectors=model.encode_item(target_tensor,None if snap is None else snapshots[1][snap,target_tensor])
+            logits=user_vectors @ target_vectors.T / temperature
             logits=logits-log_q[target_tensor][None,:]
             logits=logits.masked_fill(torch.from_numpy(negative_mask(inputs,batch,target)),float('-inf'))
-            loss=F.cross_entropy(logits,torch.arange(len(batch)))
+            if example_weights is None:
+                loss=F.cross_entropy(logits,torch.arange(len(batch)))
+            else:
+                weights=torch.from_numpy(example_weights[batch])
+                loss=(F.cross_entropy(logits,torch.arange(len(batch)),reduction='none')*weights).sum()/weights.sum()
+            if dislike_penalty:
+                # Penalize a liked target scoring below the viewer's latest earlier dislike.
+                disliked=pair_history.latest_dislike(batch)
+                rows=np.flatnonzero(disliked>=0)
+                if len(rows):
+                    rows_t=torch.from_numpy(rows)
+                    disliked_t=torch.from_numpy(disliked[rows].astype(np.int64))
+                    bad=(user_vectors[rows_t]*model.encode_item(
+                        disliked_t,None if snap is None else snapshots[1][snap[rows_t],disliked_t])).sum(-1)
+                    good=(user_vectors[rows_t]*target_vectors[rows_t]).sum(-1)
+                    loss=loss+dislike_penalty*F.softplus((bad-good)/temperature).mean()
             if not torch.isfinite(loss):
                 raise ValueError('Nonfinite training loss')
             loss.backward()
@@ -118,22 +320,28 @@ def train(inputs_dir,output_dir,epochs=4,batch_size=256,learning_rate=.002,seed=
             sparse.step()
             loss_sum+=float(loss.detach())*len(batch)
             trained+=len(batch)
-        vectors=model.all_item_vectors()
-        index=ExactIndex(vectors)
-        recommender=RetrievalRecommender(inputs,model,index)
-        score=float(np.mean([recall_at_k(record['relevant_items'],recommender(RecommendationRequest(record['user_id'],record['history_items']),100),100) for record in validation]))
+        train_seconds=time.perf_counter()-epoch_started
+        score=None
+        if select:
+            model.set_as_of(as_of)
+            recommender=RetrievalRecommender(inputs,model,ExactIndex(model.all_item_vectors()))
+            score=selection_score(recommender,validation,selection_k,as_of,inputs.meta.get('dislike_threshold',2.0))
         result={'epoch':epoch+1,'mean_training_loss':loss_sum/trained,'pairs_seen':trained,
-                'validation_recall_at_100':score,'seconds':time.perf_counter()-epoch_started}
+                f'validation_recall_at_{selection_k}':score,'seconds':time.perf_counter()-epoch_started,
+                'training_seconds':train_seconds,'updates':-(-len(selected)//batch_size)*(epoch+1)}
         records.append(result)
         print(json.dumps(result),flush=True)
-        if score>best:
-            best=score
+        if not select or score>best:
+            best=score if select else best
             config['selected_epoch']=epoch+1
-            torch.save({'config':model.config,'state_dict':model.state_dict()},root/'model.pt')
-    model=load_model(root/'model.pt',inputs.item_features)
+            torch.save({'config':model.config,'state_dict':model.state_dict(),'as_of':export_as_of},root/'model.pt')
+    model=load_model(root/'model.pt',inputs.item_features,inputs.item_ids,as_of=export_as_of)
     vectors=model.all_item_vectors()
     np.save(root/'item_embeddings.npy',vectors)
-    config.update({'training_seconds':time.perf_counter()-started,'best_validation_recall_at_100':best,
+    config['target_coverage']={'examples_processed':int(sum(r['pairs_seen'] for r in records)),
+                               'distinct_viewer_movie_targets':int(seen_pairs.sum()),
+                               'distinct_target_movies':int(len(np.unique(np.asarray(inputs.target_items)[seen_pairs])))}
+    config.update({'training_seconds':time.perf_counter()-started,f'best_validation_recall_at_{selection_k}':best if select else None,
                    'epochs_log':records,'index':{'kind':'not yet published; run retrieval.publish'},
                    'checkpoint_search':'exact NumPy cosine; production retrieval uses Weaviate'})
     write_json(root/'training.json',config)
@@ -152,10 +360,26 @@ def main():
     p.add_argument('--seed',type=int,default=42)
     p.add_argument('--embedding-dim',type=int,default=32)
     p.add_argument('--max-pairs',type=int,default=0,help='0 trains on every prepared pair')
-    p.add_argument('--validation-users',type=int,default=512)
+    p.add_argument('--validation-users',type=int,default=0,help='0 scores every selection viewer')
     p.add_argument('--threads',type=int,default=2)
+    p.add_argument('--selection-examples',type=Path,help='Dev window export, e.g. <windows>/dev.jsonl')
+    p.add_argument('--selection-k',type=int,default=500)
+    p.add_argument('--no-selection',action='store_true',help='Final refit: train fixed epochs, keep the last')
+    p.add_argument('--temperature',type=float,default=.1)
+    p.add_argument('--history',type=json.loads,default=None,
+                   help='Viewer-tower history JSON, e.g. \'{"favorites": true, "pooling": "recency", "dislikes": true}\'')
+    p.add_argument('--dislike-penalty',type=float,default=0.0)
+    p.add_argument('--five-star-weight',type=float,help='Loss weight of five-star targets (other likes = 1)')
+    p.add_argument('--identity-dropout',type=float,default=0.0,
+                   help='Share of training targets whose movie-ID vector is hidden (cold-start experiment)')
+    p.add_argument('--target-sampling',type=json.loads,default=None,
+                   help='With all-target inputs: \'{"mode": "rotate", "cap": 8, "seed": 0}\' (modes: all, spaced, fixed, rotate)')
+    p.add_argument('--movie-side',type=json.loads,default=None,
+                   help='Movie metadata JSON, e.g. \'{"metadata_dir": "...", "tags_dir": "...", "credits": true, "runtime": true, "tags": true}\'')
     a=p.parse_args()
-    train(a.inputs_dir,a.output_dir,a.epochs,a.batch_size,a.learning_rate,a.seed,a.embedding_dim,a.max_pairs,a.validation_users,a.threads)
+    train(a.inputs_dir,a.output_dir,a.epochs,a.batch_size,a.learning_rate,a.seed,a.embedding_dim,a.max_pairs,
+          a.validation_users,a.threads,a.selection_examples,a.selection_k,not a.no_selection,a.temperature,
+          a.history,a.dislike_penalty,a.movie_side,None,a.five_star_weight,a.target_sampling,a.identity_dropout)
 
 
 if __name__=='__main__':

@@ -1,8 +1,18 @@
-"""Build a reranker table: one row per (user, two-tower candidate) with features and a label.
+"""Build a reranker table: one row per (viewer, two-tower candidate) with features and a label.
 
-Run once on validation examples (reranker training data) and once on test examples
-(final evaluation). Features use training-period data only; the label is whether the
-candidate is in the example's held-out relevant_items.
+Proposed workflow (M3 feedback §1): build one table from Train B examples (reranker
+fitting; history and features from Train A) and one from dev examples (selection; history
+and features from Train A + B). Example files exported by trustworthy_recsys.data.windows
+carry a sidecar with their history cutoff, which fixes the feature window here, so a table
+can never use ratings at or after its own label window.
+
+Legacy example files (M3 validation_warm/test_warm) have no sidecar and keep the original
+behavior: features from the full training partition.
+
+Outputs:
+- rows.parquet: candidate rows (label = candidate is a later like of the viewer).
+- users.parquet: one row per viewer, including viewers with no hit in the candidates,
+  so end-to-end metrics keep full denominators and per-group counts.
 """
 
 import argparse
@@ -18,40 +28,87 @@ import torch
 
 from eval.harness import EvalExample, RecommendationRequest, load_evaluation_examples
 from trustworthy_recsys.data.reporting import code_provenance, hashes, write_json
+from trustworthy_recsys.data.windows import history_bucket, load_records, read_window_meta
 from trustworthy_recsys.retrieval.index import ExactIndex
-from trustworthy_recsys.retrieval.recommender import RetrievalRecommender
+from trustworthy_recsys.retrieval.recommender import RetrievalRecommender, request_from_record
 from trustworthy_recsys.retrieval.train import sampled_examples
-from .features import FEATURE_NAMES, RankingFeatures
+from .features import FEATURE_NAMES, RankingFeatures, rating_statistics_from_record
+
+POPULARITY_DEPTH = 50
+
+
+def source_record(metadata_dir, tags_dir):
+    """Paths and content hashes of the metadata artifacts the features were computed from."""
+    record = {}
+    if metadata_dir is not None:
+        record["metadata"] = {"path": str(metadata_dir),
+                              "sha256": hashes(Path(metadata_dir) / "movie_metadata.parquet")["sha256"]}
+    if tags_dir is not None:
+        record["tags"] = {"path": str(tags_dir), "sha256": hashes(Path(tags_dir) / "manifest.json")["sha256"]}
+    return record
 
 
 def verify_run_matches_inputs(run_dir, inputs):
-    """The run must contain the same training data the retrieval model was fitted on."""
+    """The run must contain the same data the retrieval model was fitted on."""
     scenario = inputs.meta["scenario"]
     # JSON files may differ only in line endings across platforms; Parquet bytes must match.
-    for name in ("movies.parquet", f"{scenario}/train.parquet"):
-        if hashes(Path(run_dir) / name)["sha256"] != inputs.meta["source_hashes"][name]:
+    for name, digest in inputs.meta["source_hashes"].items():
+        if name.endswith(".parquet") and hashes(Path(run_dir) / name)["sha256"] != digest:
             raise ValueError(f"Pipeline run does not match retrieval inputs: {name}")
+    if "window" in inputs.meta:
+        return
     with (Path(run_dir) / f"{scenario}/train_item_ids.json").open(encoding="utf-8") as handle:
         if [str(item) for item in json.load(handle)] != list(inputs.item_ids):
             raise ValueError("Pipeline training catalog does not match retrieval inputs")
 
 
-def build_rows(rec, features, examples, depth, progress_every=1000):
-    """Yield per-user column blocks; labels are only read after features are built."""
+def _field(example, name, default=()):
+    return example.get(name, default) if isinstance(example, dict) else getattr(example, name, default)
+
+
+def popularity_order(features):
+    """Catalog indices by descending positive count in the feature window (ties by index)."""
+    counts = features.positive_counts
+    return np.lexsort((np.arange(len(counts)), -counts))
+
+
+def build_rows(rec, features, examples, depth, progress_every=1000, popularity=None, as_of=None,
+               dislike_threshold=2.0):
+    """Yield per-viewer column blocks; labels are only read after features are built."""
     started = time.perf_counter()
     for count, example in enumerate(examples, start=1):
-        request = RecommendationRequest(example.user_id, list(example.history_items))
+        user_id = _field(example, "user_id")
+        history = list(_field(example, "history_items"))
+        exclude = tuple(_field(example, "other_rated_items"))
+        request = (request_from_record(example, as_of, dislike_threshold) if isinstance(example, dict)
+                   else RecommendationRequest(user_id, history, exclude, as_of=as_of))
         indices, scores, fallback = rec.recommend_scored(request, depth)
-        matrix = features.build(example.history_items, indices, scores, example.user_id)
+        # Legacy examples carry no rating detail, so dislikes are unknown (NaN), not zero.
+        disliked = list(request.disliked_items) if isinstance(example, dict) else None
+        # Window records pass rating-history values directly (as a browser would), computed
+        # from the viewer's earlier ratings; legacy examples keep the MovieLens-ID lookup.
+        statistics = (rating_statistics_from_record(example, as_of, features.threshold)
+                      if isinstance(example, dict) and as_of is not None and "history_ratings" in example else None)
+        matrix = features.build(history, indices, scores, user_id, statistics, disliked_items=disliked)
         movie_ids = [rec.inputs.item_ids[index] for index in indices]
-        relevant = set(example.relevant_items)
+        relevant = set(_field(example, "relevant_items"))
+        labels = np.array([movie in relevant for movie in movie_ids], dtype="int8")
+        viewer = {"user_id": user_id, "relevant_count": len(relevant),
+                  "history_length": len(features.history_indices(history)),
+                  "fallback": bool(fallback), "candidate_hits": int(labels.sum())}
+        if popularity is not None:
+            seen = set(features.history_indices(history)) | {
+                features.item_map[x] for x in exclude if x in features.item_map}
+            ranked = [i for i in popularity[:POPULARITY_DEPTH + len(seen)] if int(i) not in seen][:POPULARITY_DEPTH]
+            viewer["popularity_labels"] = [int(features.item_ids[i] in relevant) for i in ranked]
         yield {
-            "user_id": [example.user_id] * len(indices),
+            "user_id": [user_id] * len(indices),
             "movie_id": movie_ids,
-            "label": np.array([movie in relevant for movie in movie_ids], dtype="int8"),
+            "label": labels,
             "fallback": np.full(len(indices), fallback),
             "user_relevant_count": np.full(len(indices), len(relevant), dtype="int32"),
             "features": matrix,
+            "viewer": viewer,
         }
         if progress_every and count % progress_every == 0:
             print(json.dumps({"users": count, "seconds": round(time.perf_counter() - started, 1)}), flush=True)
@@ -72,7 +129,29 @@ def to_table(blocks):
     return pa.table(columns)
 
 
-def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, max_users=0, seed=42, threads=2):
+def to_users_table(blocks):
+    viewers = [block["viewer"] for block in blocks]
+    frame = pd.DataFrame(viewers)
+    frame["history_bucket"] = [history_bucket(n) for n in frame["history_length"]]
+    return pa.Table.from_pandas(frame, preserve_index=False)
+
+
+def load_examples(examples_path, max_users=0, seed=42):
+    """Window exports load as dicts (with exclusion fields); legacy files as EvalExample."""
+    meta = read_window_meta(examples_path)
+    if meta is not None:
+        if max_users:
+            return meta, sampled_examples(examples_path, max_users, seed)
+        return meta, list(load_records(examples_path))
+    if max_users:
+        return None, [EvalExample(r["user_id"], r["history_items"], r["relevant_items"])
+                      for r in sampled_examples(examples_path, max_users, seed)]
+    return None, load_evaluation_examples(examples_path)
+
+
+def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, max_users=0, seed=42, threads=2,
+          metadata_dir=None, tags_dir=None, dislike_threshold=None):
+    """`dislike_threshold` defaults to the one the tower inputs were prepared with."""
     out = Path(output_dir)
     if out.exists():
         raise ValueError("Output directory already exists; choose a new directory")
@@ -81,48 +160,73 @@ def build(run_dir, inputs_dir, model_dir, examples_path, output_dir, depth=500, 
     torch.set_num_threads(threads)
     inputs, model, vectors = RetrievalRecommender.load_verified(inputs_dir, model_dir)
     verify_run_matches_inputs(run_dir, inputs)
+    examples_path = Path(examples_path)
+    window, examples = load_examples(examples_path, max_users, seed)
+    tower_cutoff = int(pd.Timestamp(inputs.meta["training_cutoff_utc"]).timestamp())
+    if window is None:
+        cutoff, partitions = tower_cutoff, ("train",)
+    else:
+        cutoff, partitions = window["history_end"], tuple(window["partitions"])
+        if cutoff < tower_cutoff:
+            raise ValueError("Examples' history ends before the towers' fitting window")
+    if model.side is not None and model.side.config.tags:
+        # Tag summaries must be as of this table's own cutoff, not the saved export time.
+        vectors = model.set_as_of(cutoff).all_item_vectors()
     rec = RetrievalRecommender(inputs, model, ExactIndex(vectors))
-    cutoff = pd.Timestamp(inputs.meta["training_cutoff_utc"])
     load_started = time.perf_counter()
     features = RankingFeatures.from_run(
         run_dir, inputs.meta["scenario"], inputs.item_ids, inputs.item_features,
-        int(cutoff.timestamp()), threshold=inputs.meta["positive_threshold"],
+        cutoff, partitions=partitions, threshold=inputs.meta["positive_threshold"],
     )
+    features.attach_item_vectors(vectors)
+    if metadata_dir is not None or tags_dir is not None:
+        features.attach_metadata(metadata_dir, tags_dir)
     load_seconds = time.perf_counter() - load_started
-    examples_path = Path(examples_path)
-    if max_users:
-        examples = [EvalExample(r["user_id"], r["history_items"], r["relevant_items"])
-                    for r in sampled_examples(examples_path, max_users, seed)]
-    else:
-        examples = load_evaluation_examples(examples_path)
 
     out.mkdir(parents=True)
     (out / "INCOMPLETE").write_text("Reranker table build in progress.\n")
     started = time.perf_counter()
-    table = to_table(list(build_rows(rec, features, examples, depth)))
+    dislike_threshold = inputs.meta.get("dislike_threshold", 2.0) if dislike_threshold is None else dislike_threshold
+    blocks = list(build_rows(rec, features, examples, depth, popularity=popularity_order(features), as_of=cutoff,
+                             dislike_threshold=dislike_threshold))
+    table = to_table(blocks)
+    users = to_users_table(blocks)
+    del blocks
     build_seconds = time.perf_counter() - started
     pq.write_table(table, out / "rows.parquet", compression="zstd")
+    pq.write_table(users, out / "users.parquet", compression="zstd")
 
-    labels = table["label"].to_numpy()
-    per_user = pd.DataFrame({"user": table["user_id"].to_numpy(zero_copy_only=False), "label": labels}).groupby("user")["label"].sum()
+    hits = users["candidate_hits"].to_numpy()
     summary = {
-        "users": int(len(per_user)),
+        "users": int(users.num_rows),
         "rows": int(table.num_rows),
-        "positive_rows": int(labels.sum()),
-        "users_with_positive_candidate": int((per_user > 0).sum()),
-        "fallback_users": int(len(set(table.filter(table["fallback"])["user_id"].to_pylist()))),
+        "positive_rows": int(hits.sum()),
+        "users_with_positive_candidate": int((hits > 0).sum()),
+        "fallback_users": int(users["fallback"].to_numpy().sum()),
+        "history_buckets": {str(k): int(v) for k, v in
+                            pd.Series(users["history_bucket"].to_pylist()).value_counts().sort_index().items()},
     }
+    feature_cutoff = pd.Timestamp(cutoff, unit="s", tz="UTC").isoformat()
     write_json(out / "manifest.json", {
-        "description": "Reranker rows: two-tower candidates, training-period features, held-out labels",
+        "description": "Reranker rows: two-tower candidates, pre-window features, later-window labels",
         "depth": depth, "max_users": max_users, "seed": seed,
         "feature_names": list(FEATURE_NAMES),
-        "label": "1 if candidate is in the example's relevant_items (held-out rating >= threshold)",
-        "feature_cutoff_utc": inputs.meta["training_cutoff_utc"],
+        "label": "1 if candidate is in the example's relevant_items (later rating >= threshold)",
+        "feature_cutoff_utc": feature_cutoff,
+        "feature_partitions": list(partitions),
+        "feature_sources": source_record(metadata_dir, tags_dir),
+        "dislike_threshold": dislike_threshold,
+        "tower_cutoff_utc": inputs.meta["training_cutoff_utc"],
+        "window": None if window is None else {k: window[k] for k in
+                                               ("history_end_utc", "label_start_utc", "label_end_utc")},
+        "popularity_baseline": f"top {POPULARITY_DEPTH} by positive count before the feature cutoff, "
+                               "excluding the viewer's rated movies",
         "examples": str(examples_path), "examples_sha256": hashes(examples_path)["sha256"],
         "run_dir": str(run_dir),
         "input_manifest_sha256": hashes(Path(inputs_dir) / "manifest.json")["sha256"],
         "model_manifest_sha256": hashes(Path(model_dir) / "manifest.json")["sha256"],
         "rows_sha256": hashes(out / "rows.parquet")["sha256"],
+        "users_sha256": hashes(out / "users.parquet")["sha256"],
         "summary": summary,
         "timing_seconds": {"feature_fit": load_seconds, "build": build_seconds,
                            "per_user_ms": build_seconds * 1000 / max(1, summary["users"])},
@@ -137,14 +241,18 @@ def main():
     p.add_argument("--run-dir", type=Path, required=True, help="Completed pipeline run, e.g. data/processed/movielens_phase1")
     p.add_argument("--inputs-dir", type=Path, required=True)
     p.add_argument("--model-dir", type=Path, required=True)
-    p.add_argument("--examples", type=Path, required=True, help="validation_warm.jsonl to train, test_warm.jsonl to evaluate")
+    p.add_argument("--examples", type=Path, required=True,
+                   help="Window export (train_b.jsonl to fit, dev.jsonl to select, test.jsonl to evaluate)")
     p.add_argument("--output-dir", type=Path, required=True)
     p.add_argument("--depth", type=int, default=500)
     p.add_argument("--max-users", type=int, default=0, help="0 uses every example")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--threads", type=int, default=2)
+    p.add_argument("--metadata-dir", type=Path, help="Movie credits/runtime (data.metadata output)")
+    p.add_argument("--tags-dir", type=Path, help="Encoded tags (data.tags output)")
     a = p.parse_args()
-    summary = build(a.run_dir, a.inputs_dir, a.model_dir, a.examples, a.output_dir, a.depth, a.max_users, a.seed, a.threads)
+    summary = build(a.run_dir, a.inputs_dir, a.model_dir, a.examples, a.output_dir, a.depth, a.max_users, a.seed,
+                    a.threads, a.metadata_dir, a.tags_dir)
     print(json.dumps(summary, indent=2))
 
 

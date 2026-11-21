@@ -111,7 +111,7 @@ def test_recommend_scored_returns_cosine_scores_and_null_fallback():
     vectors=np.array([[1.,0.],[.6,.8],[0.,1.]],dtype='float32')
     inputs=SimpleNamespace(item_ids=['a','b','c'],positive_counts=np.array([1,3,2]),item_map={'a':0,'b':1,'c':2},user_map={})
     rec=RetrievalRecommender(inputs,SimpleNamespace(eval=lambda:None),ExactIndex(vectors))
-    rec.query_vector=lambda history:None if not history else np.array([1.,0.],dtype='float32')
+    rec.query_vector=lambda history,request=None:None if not history else np.array([1.,0.],dtype='float32')
     indices,scores,fallback=rec.recommend_scored(RecommendationRequest('new',['a']),2)
     assert (indices,fallback)==([1,2],False)
     assert scores==pytest.approx([.6,0.])

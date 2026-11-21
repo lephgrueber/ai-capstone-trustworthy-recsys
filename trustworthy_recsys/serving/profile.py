@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from trustworthy_recsys.serving.contracts import ModelQuery, PreferenceState, RatingStatistics
 
 FUTURE_TOLERANCE = timedelta(minutes=5)
+DISLIKE_THRESHOLD = 2.0
 SECONDS_PER_DAY = 86_400
 
 
@@ -40,18 +41,26 @@ def derive_model_query(preferences: PreferenceState, known_user_id: str | None, 
         statistics = RatingStatistics(complete=False)
     elif normalized:
         latest = max(row[0] for row in normalized)
+        liked = [row[0] for row in normalized if row[2] >= 4.0]
         statistics = RatingStatistics(
             mean_rating=sum(row[2] for row in normalized) / len(normalized),
             rating_count=len(normalized),
             days_inactive=max(0.0, (as_of - latest).total_seconds() / SECONDS_PER_DAY),
+            days_since_like=max(0.0, (as_of - max(liked)).total_seconds() / SECONDS_PER_DAY) if liked else None,
             complete=True,
         )
     else:
         statistics = RatingStatistics(rating_count=0, complete=True)
 
+    dated = [(movie_id, rating, rated_at.timestamp()) for rated_at, movie_id, rating in normalized if rating >= 4.0]
     return ModelQuery(
         history_items=[*legacy, *positives],
         known_user_id=known_user_id,
         rated_movie_ids=[movie_id for _, movie_id, _ in normalized],
         rating_statistics=statistics,
+        # Legacy favorites carry no fabricated stars or dates.
+        history_ratings=[None] * len(legacy) + [rating for _, rating, _ in dated],
+        history_times=[None] * len(legacy) + [stamp for _, _, stamp in dated],
+        disliked_items=[movie_id for _, movie_id, rating in normalized if rating <= DISLIKE_THRESHOLD],
+        as_of=as_of.timestamp(),
     )

@@ -3,7 +3,30 @@ import type { CatalogMovie } from "./api/client";
 export const PROFILE_STORAGE_KEY = "trustworthy-recsys-browser-profile-v1";
 const LEGACY_KEYS = ["trustworthy-recsys-preferences", "trustworthy-recsys-profile"];
 
-export type BrowserRating = { movie_id: string; rating: number; rated_at: string };
+// Optional tags describe the movie (like MovieLens tags); tagged_at is their latest change.
+export type BrowserRating = { movie_id: string; rating: number; rated_at: string; tags?: string[]; tagged_at?: string };
+export const MAX_TAGS = 5;
+export const MAX_TAG_LENGTH = 40;
+
+export function parseTags(text: string): string[] {
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const raw of text.split(",")) {
+    const tag = raw.trim().replace(/\s+/g, " ").slice(0, MAX_TAG_LENGTH);
+    if (tag && !seen.has(tag.toLocaleLowerCase()) && tags.length < MAX_TAGS) {
+      seen.add(tag.toLocaleLowerCase());
+      tags.push(tag);
+    }
+  }
+  return tags;
+}
+
+function validTags(record: Partial<BrowserRating>): boolean {
+  if (record.tags === undefined) return record.tagged_at === undefined;
+  return Array.isArray(record.tags) && record.tags.length <= MAX_TAGS
+    && record.tags.every((tag) => typeof tag === "string" && !!tag.trim() && tag.length <= MAX_TAG_LENGTH)
+    && typeof record.tagged_at === "string" && Number.isFinite(Date.parse(record.tagged_at));
+}
 export type BrowserProfile = {
   version: 1;
   ratings: BrowserRating[];
@@ -21,7 +44,7 @@ function validRating(value: unknown): value is BrowserRating {
   return typeof record.movie_id === "string" && !!record.movie_id && !/\s/.test(record.movie_id)
     && typeof record.rating === "number" && Number.isFinite(record.rating)
     && record.rating >= .5 && record.rating <= 5 && Number.isInteger(record.rating * 2)
-    && Number.isFinite(timestamp) && /(?:Z|[+-]00:00)$/.test(record.rated_at!);
+    && Number.isFinite(timestamp) && /(?:Z|[+-]00:00)$/.test(record.rated_at!) && validTags(record);
 }
 
 function sanitizeMovies(value: unknown): Record<string, CatalogMovie> {
@@ -95,11 +118,18 @@ export function saveBrowserProfile(profile: BrowserProfile, storage?: Storage): 
   }
 }
 
-export function setRating(profile: BrowserProfile, movie: CatalogMovie, rating: number, now = new Date()): { profile: BrowserProfile; changed: boolean } {
+export function setRating(profile: BrowserProfile, movie: CatalogMovie, rating: number, now = new Date(), tags?: string[]): { profile: BrowserProfile; changed: boolean } {
   if (!Number.isFinite(rating) || rating < .5 || rating > 5 || !Number.isInteger(rating * 2)) throw new Error("Rating must be 0.5–5 in half-star increments.");
   const existing = profile.ratings.find((record) => record.movie_id === movie.movie_id);
-  if (existing?.rating === rating) return { profile, changed: false };
-  const record = { movie_id: movie.movie_id, rating, rated_at: now.toISOString() };
+  const nextTags = tags === undefined ? existing?.tags ?? [] : tags;
+  const sameTags = JSON.stringify(existing?.tags ?? []) === JSON.stringify(nextTags);
+  if (existing?.rating === rating && sameTags) return { profile, changed: false };
+  // rated_at changes only with the star rating (it drives recency features); tags keep their own time.
+  const record: BrowserRating = { movie_id: movie.movie_id, rating, rated_at: existing?.rating === rating ? existing.rated_at : now.toISOString() };
+  if (nextTags.length) {
+    record.tags = nextTags;
+    record.tagged_at = sameTags && existing?.tagged_at ? existing.tagged_at : now.toISOString();
+  }
   return {
     changed: true,
     profile: {

@@ -26,7 +26,7 @@ def publish(inputs_dir, model_dir, output_dir, collection):
         if hashes(source/name)['sha256'] != digest:
             raise ValueError(f'Model artifact hash mismatch: {name}')
     vectors = np.load(source/'item_embeddings.npy')
-    model = load_model(source/'model.pt', inputs.item_features)
+    model = load_model(source/'model.pt', inputs.item_features, inputs.item_ids)
     if not np.allclose(vectors, model.all_item_vectors(), atol=1e-6):
         raise ValueError('Saved embeddings do not match the selected model')
     out.mkdir(parents=True)

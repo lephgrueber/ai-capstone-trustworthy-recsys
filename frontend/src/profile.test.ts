@@ -43,3 +43,25 @@ describe("browser rating profile", () => {
     expect(loaded.warning).toBe("Browser storage is unavailable or unreadable. Ratings cannot be saved until storage is available.");
   });
 });
+
+
+import { parseTags } from "./profile";
+
+describe("review tags", () => {
+  it("parses up to five distinct trimmed phrases", () => {
+    expect(parseTags(" space  travel, Funny, funny, , a,b,c,d,e")).toEqual(["space travel", "Funny", "a", "b", "c"]);
+  });
+
+  it("changing only tags keeps rated_at and stamps tagged_at", () => {
+    const first = setRating(empty(), movie, 4, new Date("2026-11-01T00:00:00Z")).profile;
+    const tagged = setRating(first, movie, 4, new Date("2026-11-02T00:00:00Z"), ["slow burn"]);
+    expect(tagged.changed).toBe(true);
+    expect(tagged.profile.ratings[0]).toEqual({ movie_id: "1", rating: 4, rated_at: "2026-11-01T00:00:00.000Z", tags: ["slow burn"], tagged_at: "2026-11-02T00:00:00.000Z" });
+    expect(setRating(tagged.profile, movie, 4, new Date(), ["slow burn"]).changed).toBe(false);
+    const saved = { ...tagged.profile };
+    const storage = new Map<string, string>();
+    const fake = { getItem: (k: string) => storage.get(k) ?? null, setItem: (k: string, v: string) => void storage.set(k, v) } as unknown as Storage;
+    expect(saveBrowserProfile(saved, fake)).toBe(true);
+    expect(loadBrowserProfile(fake).profile.ratings[0].tags).toEqual(["slow burn"]);
+  });
+});

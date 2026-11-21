@@ -118,3 +118,22 @@ def test_temporary_title_context_reaches_models_without_mutating_preferences():
     assert response.applied_preferences == request.preferences
     assert response.applied_preferences.history_items == []
     assert [item.movie.movie_id for item in response.recommendations] == ["101", "103"]
+
+
+def test_deeper_candidate_budget_up_to_1000_is_accepted():
+    from trustworthy_recsys.serving.config import Settings
+    retrieval = RecordsLimit()
+    RecommendationService(fixture_catalog(), retrieval, PassThroughReranker(), "fixture", candidate_budget=1000).recommend(
+        RecommendationRequest.model_validate(payload()))
+    assert retrieval.limits == [1000]
+    batch = CandidateBatch(candidates=[ScoredMovie(movie_id=str(i)) for i in range(1000)], component=RecordsLimit.info)
+    assert len(batch.candidates) == 1000
+
+
+def test_candidate_budget_env_allows_1000(monkeypatch):
+    from trustworthy_recsys.serving.config import Settings
+    monkeypatch.setenv("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET", "1000")
+    assert Settings.from_env().candidate_budget == 1000
+    monkeypatch.setenv("TRUSTWORTHY_RECSYS_CANDIDATE_BUDGET", "1001")
+    with pytest.raises(ValueError):
+        Settings.from_env()

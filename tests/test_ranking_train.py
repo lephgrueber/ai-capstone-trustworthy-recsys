@@ -99,3 +99,114 @@ def test_train_and_evaluate_learn_informative_feature(tmp_path):
         handle.write("tamper")
     with pytest.raises(ValueError, match="hash mismatch"):
         evaluate(tmp_path / "test", tmp_path / "model", tmp_path / "again.json")
+
+
+def write_users(path, users=60, seed=0):
+    """users.parquet for a write_table() table, including a popularity list."""
+    table = pq.read_table(path / "rows.parquet").to_pandas()
+    viewers = table.groupby("user_id", sort=False).agg(relevant_count=("user_relevant_count", "first"),
+                                                       candidate_hits=("label", "sum")).reset_index()
+    rng = np.random.default_rng(seed)
+    viewers["history_length"] = np.where(np.arange(len(viewers)) % 2, 0, 30)
+    viewers["history_bucket"] = np.where(viewers["history_length"] == 0, "history_0", "history_21_100")
+    viewers["fallback"] = viewers["history_length"] == 0
+    viewers["popularity_labels"] = [list((rng.random(50) < .05).astype(int)) for _ in range(len(viewers))]
+    pq.write_table(pa.Table.from_pandas(viewers, preserve_index=False), path / "users.parquet")
+    manifest = json.loads((path / "manifest.json").read_text())
+    manifest["users_sha256"] = hashes(path / "users.parquet")["sha256"]
+    manifest["model_manifest_sha256"] = "towers"
+    write_json(path / "manifest.json", manifest)
+
+
+def test_rounds_selected_on_dev_and_fixed_rounds(tmp_path):
+    from trustworthy_recsys.ranking.train import ndcg_by_group
+    write_table(tmp_path / "train_b")
+    write_table(tmp_path / "dev", seed=1)
+    for name in ("train_b", "dev"):
+        write_users(tmp_path / name)
+    result = train(tmp_path / "train_b", tmp_path / "model", rounds=30, threads=1, valid_table_dir=tmp_path / "dev",
+                   params={"min_data_in_leaf": 5, "num_leaves": 7}, grid_points=6)
+    selection = result["selection"]
+    assert selection["viewers"] == 60 and result["holdout"] is None
+    assert str(selection["best_rounds"]) in selection["curve"] and result["best_iteration"] == selection["best_rounds"]
+    assert selection["best_ndcg"] == max(selection["curve"].values()) > selection["two_tower_order_ndcg"]
+    report = evaluate(tmp_path / "dev", tmp_path / "model", tmp_path / "report.json", bootstrap=20)
+    assert report["population"] == "all table users"
+    assert report["viewer_groups"]["history_0"] == 30 and "popularity/all" in report["metrics"]
+    assert "ndcg_at_12" in report["metrics"]["lambdarank/all"]
+    fixed = train(tmp_path / "train_b", tmp_path / "final", rounds=7, holdout=0, threads=1,
+                  params={"min_data_in_leaf": 5, "num_leaves": 7})
+    assert fixed["best_iteration"] == 7 and fixed["selection"] is None
+    with pytest.raises(ValueError, match="must differ"):
+        train(tmp_path / "train_b", tmp_path / "same", rounds=3, threads=1, valid_table_dir=tmp_path / "train_b")
+    # Vectorized NDCG agrees with the repository metric, including a zero-hit viewer.
+    groups = np.array([0, 0, 0, 1, 1])
+    out = ndcg_by_group(groups, np.array([0, 1, 0, 0, 0.]), np.array([.9, .5, .1, 1, 0]), np.array([2, 1]), 2)
+    assert out[0] == pytest.approx(ndcg_at_k({"b", "z"}, ["a", "b", "c"], 2)) and out[1] == 0
+
+
+def test_paired_comparison_of_feature_variants(tmp_path):
+    from trustworthy_recsys.ranking.compare import compare
+    write_table(tmp_path / "train_b")
+    write_table(tmp_path / "dev", seed=1)
+    for name in ("train_b", "dev"):
+        write_users(tmp_path / name)
+    common = dict(rounds=20, threads=1, valid_table_dir=tmp_path / "dev", params={"min_data_in_leaf": 5, "num_leaves": 7})
+    train(tmp_path / "train_b", tmp_path / "with", **common)
+    train(tmp_path / "train_b", tmp_path / "without", drop_features=["recent_cosine_max"], **common)
+    train(tmp_path / "train_b", tmp_path / "with_seed2", seed=2, **common)
+    report = compare(tmp_path / "dev", [tmp_path / "without"], [tmp_path / "with", tmp_path / "with_seed2"],
+                     k=12, samples=200, output=tmp_path / "cmp.json")
+    gain = report["difference"]["ndcg_at_12"]["all"]
+    # The informative feature helps, and the interval is around the observed mean.
+    assert gain["mean_difference"] > 0 and gain["ci95"][0] <= gain["mean_difference"] <= gain["ci95"][1]
+    assert gain["viewers"] == 60 and set(report["difference"]["ndcg_at_12"]) >= {"all", "history_0"}
+    assert len(report["seed_spread"]["ndcg_at_12"]["b"]["runs"]) == 2
+    baseline = compare(tmp_path / "dev", ["pass_through"], [tmp_path / "with"], samples=50)
+    assert baseline["scores"]["recall_at_12"]["a"] >= 0
+
+
+def test_graded_ndcg_uses_star_gains_and_full_ideal():
+    from trustworthy_recsys.ranking.labels import five_star_labels, graded_gain, graded_ndcg
+    gains = graded_gain([5.0, 0, 4.0]) * (np.array([5.0, 0, 4.0]) >= 4)
+    # Ideal includes a missed 4.5-star like (gain 1.5): [2, 1.5, 1].
+    ideal = [np.array([2.0, 1.5, 1.0])]
+    out = graded_ndcg(np.zeros(3, dtype=int), gains, np.array([3.0, 2.0, 1.0]), ideal, 2)
+    discounts = 1 / np.log2([2, 3])
+    assert out[0] == pytest.approx(2 * discounts[0] / (2 * discounts[0] + 1.5 * discounts[1]))
+    assert five_star_labels(np.array([0, 4.0, 4.5, 5.0])).tolist() == [0, 1, 1, 2]
+
+
+def test_ablation_runner_compares_variants_with_intervals(tmp_path):
+    from trustworthy_recsys.ranking.ablations import GROUPS, dropped, run
+    write_table(tmp_path / "train_b")
+    write_table(tmp_path / "dev", seed=1)
+    for name in ("train_b", "dev"):
+        write_users(tmp_path / name)
+    params = {"min_data_in_leaf": 5, "num_leaves": 7}
+    variants = {"all": {"params": params}, "no_recent": {"drop": ["recent_cosine_max"], "params": params},
+                "m3_only_seeds": {"keep_groups": ["m3"], "params": params, "seeds": [42, 7]},
+                "favorites_only_app": {"params": params, "availability": "favorites_only"}}
+    rows = run(tmp_path / "train_b", tmp_path / "dev", None, variants, tmp_path / "ablations", "all",
+               rounds=15, threads=1, samples=50)
+    by = {r["variant"]: r for r in rows}
+    assert by["all"]["difference_vs_reference"]["all"]["mean_difference"] == 0
+    assert by["no_recent"]["difference_vs_reference"]["all"]["mean_difference"] < 0  # the informative feature
+    assert by["m3_only_seeds"]["features"] == len(GROUPS["m3"]) and len(by["m3_only_seeds"]["seed_spread"]["ndcg_at_12"]["b"]["runs"]) == 2
+    assert "| no_recent |" in (tmp_path / "ablations" / "summary.md").read_text()
+    assert set(dropped({"keep_groups": ["m3", "tower"]})) == set(FEATURE_NAMES) - set(GROUPS["m3"]) - set(GROUPS["tower"])
+
+
+def test_compare_masks_each_side_with_its_own_availability(tmp_path):
+    from trustworthy_recsys.ranking.compare import compare
+    write_table(tmp_path / "train_b")
+    write_table(tmp_path / "dev", seed=1)
+    for name in ("train_b", "dev"):
+        write_users(tmp_path / name)
+    train(tmp_path / "train_b", tmp_path / "m", rounds=10, threads=1, valid_table_dir=tmp_path / "dev",
+          params={"min_data_in_leaf": 5, "num_leaves": 7})
+    report = compare(tmp_path / "dev", [tmp_path / "m"], [tmp_path / "m"], samples=20,
+                     availability="favorites_only", availability_a="star_ratings")
+    assert report["missing_at_evaluation"]["a"] == [] and "user_mean_rating" in report["missing_at_evaluation"]["b"]
+    same = compare(tmp_path / "dev", [tmp_path / "m"], [tmp_path / "m"], samples=20, availability="star_ratings")
+    assert same["difference"]["ndcg_at_12"]["all"]["mean_difference"] == 0

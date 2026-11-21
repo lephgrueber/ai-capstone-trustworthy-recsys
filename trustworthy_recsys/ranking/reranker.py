@@ -49,13 +49,28 @@ class LambdaRankReranker:
             raise ValueError("reranker was trained with a different retrieval model")
         if training["feature_cutoff_utc"] != retrieval_inputs.meta["training_cutoff_utc"]:
             raise ValueError("reranker feature cutoff does not match retrieval training cutoff")
-        if hashes(Path(run_dir) / scenario / "train.parquet")["sha256"] != retrieval_inputs.meta["source_hashes"][f"{scenario}/train.parquet"]:
-            raise ValueError("catalog run training data does not match retrieval inputs")
-        cutoff = int(pd.Timestamp(training["feature_cutoff_utc"]).timestamp())
+        for name, digest in retrieval_inputs.meta["source_hashes"].items():
+            if name.endswith(".parquet") and name != "movies.parquet" and hashes(Path(run_dir) / name)["sha256"] != digest:
+                raise ValueError("catalog run training data does not match retrieval inputs")
+        serving = training.get("serving_features")
+        if serving:
+            # Windowed pipeline: features cover all fitting data (e.g. Final A + Final B).
+            cutoff, partitions = int(pd.Timestamp(serving["end_utc"]).timestamp()), tuple(serving["partitions"])
+        else:
+            cutoff, partitions = int(pd.Timestamp(training["feature_cutoff_utc"]).timestamp()), ("train",)
         features = RankingFeatures.from_run(
             run_dir, scenario, retrieval_inputs.item_ids, retrieval_inputs.item_features, cutoff,
-            threshold=retrieval_inputs.meta["positive_threshold"],
+            partitions=partitions, threshold=retrieval_inputs.meta["positive_threshold"],
         )
+        # Vectors are already verified by retrieval_fingerprint above.
+        features.attach_item_vectors(np.load(Path(retrieval_model_dir) / "item_embeddings.npy"))
+        sources = training.get("feature_sources") or {}
+        if sources:
+            from .dataset import source_record
+            paths = {name: sources[name]["path"] if name in sources else None for name in ("metadata", "tags")}
+            if source_record(paths["metadata"], paths["tags"]) != sources:
+                raise ValueError("reranker metadata artifacts changed since training")
+            features.attach_metadata(paths["metadata"], paths["tags"])
         info = ComponentInfo(name="lambdarank", version=f"{root.name}:{manifest_fingerprint(root)}", mode="learned")
         lightgbm_threads(1)  # must precede Booster creation, which parses the model in parallel
         return cls(lgb.Booster(model_file=str(root / "model.txt")), features, training["features"], info)
@@ -72,8 +87,10 @@ class LambdaRankReranker:
         if any(item.score is not None for item in items):
             scores = np.array([np.nan if item.score is None else item.score for item in items], dtype="float32")
         # Position is the filtered retrieval order; hard filters only remove candidates.
+        # Dislikes are known only for a numeric browser profile (as_of is set with it).
+        disliked = query.disliked_items if query.as_of is not None else None
         matrix = self.features.build(
-            query.history_items, indices, scores, query.known_user_id, query.rating_statistics
+            query.history_items, indices, scores, query.known_user_id, query.rating_statistics, disliked
         )
         predicted = self.booster.predict(matrix[:, self.columns], num_threads=lightgbm_threads(1))
         order = np.argsort(-predicted, kind="stable")[:limit]

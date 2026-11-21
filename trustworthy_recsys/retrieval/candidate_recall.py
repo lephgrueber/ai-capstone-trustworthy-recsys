@@ -68,7 +68,48 @@ def measure(rec, examples, ks):
     }
 
 
-def run(inputs_dir, model_dir, examples_path, output, ks=DEFAULT_KS, max_users=0, seed=42, threads=2):
+def measure_window(rec, records, ks, as_of, genres_by_movie=None, genre_filters=()):
+    """Window-export records: exclusions applied, full denominators, optional genre filters.
+
+    Retrieval runs once at the deepest K; shallower depths are prefixes. For each browser
+    genre filter the pool keeps only movies in that genre, and recall is the share of the
+    viewer's later likes *in that genre* that remain in the pool (viewers without such a
+    like are skipped for that filter).
+    """
+    from .recommender import request_from_record
+    ks = sorted(set(ks))
+    depth = ks[-1]
+    populations = defaultdict(list)
+    latency = defaultdict(list)
+    for record in records:
+        request = request_from_record(record, as_of)
+        ranked = None
+        for k in ks:
+            started = time.perf_counter()
+            indices, fallback = rec.recommend_indices(request, k)
+            latency[k].append((time.perf_counter() - started) * 1000)
+            if k == depth:
+                ranked = [rec.inputs.item_ids[i] for i in indices]
+        relevant = set(record["relevant_items"])
+        row = {k: recall_at_k(relevant, ranked, k) for k in ks}
+        for name in ('all', 'fallback' if fallback else 'learned', history_bucket(len(record['history_items']))):
+            populations[f'two_tower/{name}'].append(row)
+        for genre in genre_filters:
+            wanted = {m for m in relevant if genre in genres_by_movie.get(m, ())}
+            if not wanted:
+                continue
+            pools = {k: [m for m in ranked[:k] if genre in genres_by_movie.get(m, ())] for k in ks}
+            populations[f'two_tower/genre_{genre}'].append({k: len(wanted & set(pools[k])) / len(wanted) for k in ks})
+    return {
+        'ks': ks, 'metrics': {name: summarize(rows, ks) for name, rows in sorted(populations.items())},
+        'exact_search_latency_ms_by_depth': {str(k): dict(zip(['p50', 'p95', 'p99'], map(float, np.percentile(v, [50, 95, 99]))))
+                                             for k, v in latency.items()},
+        'genre_filter_note': 'pool = depth-K candidates after the genre filter; denominator = later likes in that genre',
+    }
+
+
+def run(inputs_dir, model_dir, examples_path, output, ks=DEFAULT_KS, max_users=0, seed=42, threads=2,
+        genre_filters=(), run_dir=None):
     output = Path(output)
     if output.exists():
         raise ValueError('Output report already exists; choose a new path')
@@ -78,6 +119,24 @@ def run(inputs_dir, model_dir, examples_path, output, ks=DEFAULT_KS, max_users=0
     inputs, model, vectors = RetrievalRecommender.load_verified(inputs_dir, model_dir)
     rec = RetrievalRecommender(inputs, model, ExactIndex(vectors))
     examples_path = Path(examples_path)
+    from trustworthy_recsys.data.windows import load_records, read_window_meta
+    window = read_window_meta(examples_path)
+    if window is not None:
+        records = sampled_examples(examples_path, max_users, seed) if max_users else list(load_records(examples_path))
+        genres = {}
+        if genre_filters:
+            import pyarrow.parquet as pq
+            movies = pq.read_table(Path(run_dir or inputs.meta['source_run']) / 'movies.parquet', columns=['movie_id', 'genres'])
+            genres = dict(zip(movies['movie_id'].to_pylist(), map(set, movies['genres'].to_pylist())))
+        if model.side is not None and model.side.config.tags:
+            rec = RetrievalRecommender(inputs, model, ExactIndex(model.set_as_of(window['history_end']).all_item_vectors()))
+        result = measure_window(rec, records, ks, window['history_end'], genres, genre_filters)
+        result.update({'examples': str(examples_path), 'examples_sha256': hashes(examples_path)['sha256'],
+                       'max_users': max_users, 'search': 'exact cosine', 'code': code_provenance(),
+                       'model_manifest_sha256': hashes(Path(model_dir) / 'manifest.json')['sha256']})
+        output.parent.mkdir(parents=True, exist_ok=True)
+        write_json(output, result)
+        return result
     if max_users:
         # Same label-independent hash sample used for checkpoint selection.
         records = sampled_examples(examples_path, max_users, seed)
@@ -121,10 +180,14 @@ def main():
     p.add_argument('--max-users', type=int, default=0, help='0 evaluates every example')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--threads', type=int, default=2)
+    p.add_argument('--genre-filters', nargs='*', default=[], help='Browser genre filters applied after retrieval')
+    p.add_argument('--run-dir', type=Path, help='Pipeline run for movie genres (default: the inputs source run)')
     a = p.parse_args()
-    result = run(a.inputs_dir, a.model_dir, a.examples, a.output, a.ks, a.max_users, a.seed, a.threads)
+    result = run(a.inputs_dir, a.model_dir, a.examples, a.output, a.ks, a.max_users, a.seed, a.threads,
+                 a.genre_filters, a.run_dir)
     print(format_table(result))
-    print(json.dumps({k: result[k] for k in ('mean_in_catalog_label_fraction', 'exact_search_latency_ms')}))
+    print(json.dumps({k: result[k] for k in ('mean_in_catalog_label_fraction', 'exact_search_latency_ms',
+                                             'exact_search_latency_ms_by_depth') if k in result}))
 
 
 if __name__ == '__main__':
